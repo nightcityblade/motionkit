@@ -31,6 +31,17 @@ bump as "something may have moved".
 
 ### Added
 
+- **Rigid-body dynamics** (WP-04). `DynamicChain` computes joint torques by
+  recursive Newton-Euler and the joint-space mass matrix by the
+  composite-rigid-body algorithm, both allocation-free and callable from a
+  cyclic task. Gravity is a settable field vector, so an arm on a wall or a
+  ceiling is not a special case. Inertia tensors that could not belong to a
+  real body are refused at construction rather than producing plausible wrong
+  torques. ([ADR-0010](docs/adr/0010-dynamics-in-the-base-frame.md))
+- **`SerialChain::linkTransforms`** — where each link has been carried at a
+  given configuration. Added because dynamics needs it, and exposed rather than
+  duplicated because the asymmetry it encodes (a joint is carried by everything
+  upstream of it but not by itself) is worth stating once.
 - **Forward and inverse kinematics for serial chains** (WP-03). `SerialChain`
   describes revolute joints by an axis and a point rather than DH parameters,
   computes forward kinematics as a product of exponentials, and solves the

@@ -165,6 +165,7 @@ jobs:
           cat > /tmp/consumer/main.cpp <<'EOT'
           #include <array>
           #include <cmath>
+          #include "motionkit/core/dynamics.hpp"
           #include "motionkit/core/frame_graph.hpp"
           #include "motionkit/core/kinematics.hpp"
           #include "motionkit/core/trajectory.hpp"
@@ -226,6 +227,21 @@ jobs:
                 StopProfile::plan(MotionState{0.0, permitted.value, 0.0}, limits[0]);
             if (!stop || std::abs(stop.value.stoppingDistance() - 0.3) > 1e-9) {
               return 11;
+            }
+            // The dynamics header. Holding the example arm against gravity must
+            // take a non-zero torque somewhere -- an all-zero result would mean
+            // the installed inertias were lost rather than exported.
+            const DynamicChain loaded = DynamicChain::sixAxisExample();
+            std::array<Scalar, 6> torque{};
+            if (loaded.gravityTorque(joints, torque) != DynamicsError::None) {
+              return 12;
+            }
+            Scalar effort = 0.0;
+            for (const Scalar t : torque) {
+              effort += std::abs(t);
+            }
+            if (!(effort > 1e-6)) {
+              return 13;
             }
             return 0;
           }

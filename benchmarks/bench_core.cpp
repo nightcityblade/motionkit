@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
 #include "motionkit/core/trajectory.hpp"
@@ -179,6 +180,27 @@ int main() {
            q[0] += 0.02 * static_cast<Scalar>(i % 10);
            const auto solved = arm6.inverse(ik_target, q);
            g_sink = static_cast<Scalar>(solved.value.iterations);
+         }));
+
+  const DynamicChain dyn6 = DynamicChain::sixAxisExample();
+  const std::array<Scalar, 6> rate{0.5, 0.2, -0.4, 0.9, -0.1, 0.3};
+  const std::array<Scalar, 6> accel{-0.2, 1.1, 0.6, -0.7, 0.4, 0.8};
+  std::array<Scalar, 6> torque{};
+  std::array<Scalar, 36> mass{};
+
+  report("DynamicChain::inverseDynamics (6R)", measure([&](std::size_t) {
+           (void)dyn6.inverseDynamics(pose, rate, accel, torque);
+           g_sink = torque[0];
+         }));
+
+  report("DynamicChain::gravityTorque (6R)", measure([&](std::size_t) {
+           (void)dyn6.gravityTorque(pose, torque);
+           g_sink = torque[0];
+         }));
+
+  report("DynamicChain::massMatrix (6R, CRBA)", measure([&](std::size_t) {
+           (void)dyn6.massMatrix(pose, mass);
+           g_sink = mass[0];
          }));
 
   std::printf(

@@ -149,6 +149,22 @@ Expected<SE3, KinematicsError> SerialChain::forward(
   return {pose * base_T_tool_at_zero_, KinematicsError::None};
 }
 
+KinematicsError SerialChain::linkTransforms(std::span<const Scalar> q,
+                                            std::span<SE3> out) const noexcept {
+  if (q.size() != count_ || out.size() < count_) {
+    return KinematicsError::SizeMismatch;
+  }
+  if (!allFinite(q)) {
+    return KinematicsError::NonFiniteInput;
+  }
+  SE3 carried;
+  for (std::size_t i = 0; i < count_; ++i) {
+    carried = carried * jointTransform(joints_[i], q[i]);
+    out[i] = carried;
+  }
+  return KinematicsError::None;
+}
+
 KinematicsError SerialChain::jacobian(std::span<const Scalar> q,
                                       std::span<Scalar> out) const noexcept {
   if (q.size() != count_ || out.size() != kTwistSize * count_) {

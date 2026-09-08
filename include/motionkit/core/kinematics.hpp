@@ -153,6 +153,21 @@ class SerialChain {
   [[nodiscard]] KinematicsError jacobian(std::span<const Scalar> q,
                                          std::span<Scalar> out) const noexcept;
 
+  /// Where each link has been carried, at configuration `q`.
+  ///
+  /// `out[i]` is the rigid transform taking link `i` from its zero
+  /// configuration to its pose at `q` -- the product of the joint screws up to
+  /// and including joint `i`. Link `i` is the body that joint `i` moves, so
+  /// link 0 is the first moving link and the fixed base is not in the list.
+  /// `out` must hold at least jointCount() entries.
+  ///
+  /// A joint is carried by everything upstream of it but not by itself, so
+  /// joint `i`'s axis and point at `q` come from `out[i - 1]`, with the
+  /// identity standing in for joint 0. That asymmetry is the whole reason this
+  /// is worth exposing rather than leaving each caller to rediscover it.
+  [[nodiscard]] KinematicsError linkTransforms(std::span<const Scalar> q,
+                                               std::span<SE3> out) const noexcept;
+
   /// Yoshikawa's measure, sqrt(det(J * J^T)).
   ///
   /// Zero exactly at a singularity, and small near one. It has units and is not

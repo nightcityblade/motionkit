@@ -19,7 +19,7 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-01 | Build system, CI, static analysis, install/export | **Done** |
 | WP-02 | SE(3) transforms, frame graph, tool modeling | **Done** |
 | WP-03 | Forward and inverse kinematics (6R) | **Done** |
-| WP-04 | Rigid-body dynamics (RNEA, CRBA) | Planned |
+| WP-04 | Rigid-body dynamics (RNEA, CRBA) | **Done** |
 | WP-05 | Trajectory planning (jerk-limited S-curve, multi-axis synchronisation) | **Done** |
 | WP-11 | Stopping from an arbitrary state, and the safety envelope it defines | **Done** |
 | WP-06 | Hand-eye, TCP and base-frame calibration | Planned |
@@ -27,8 +27,8 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-12 | CUDA batch IK and collision checking | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-139 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 128 ordinary tests; the eleven
+157 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 144 ordinary tests; the thirteen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -47,7 +47,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 128 tests: the eleven tests that instrument global allocation are a
+runs 144 tests: the thirteen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -236,6 +236,37 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**The mass matrix is computed twice, by two algorithms that share no derivation.**
+It could have come out of the recursive Newton-Euler code already written — one
+call per joint with a unit acceleration — for about twenty lines. The
+composite-rigid-body algorithm was written separately anyway, propagating the
+momentum of each frozen distal subtree. The two share the link frames and
+nothing else, so each is a test of the other, and the agreement is not a
+tolerance anybody chose: **8.882e-16 kg·m²**, about one unit in the last place.
+A hand-written expected matrix would only have proved that the author and the
+implementation multiplied the same way.
+
+**Gravity enters as an acceleration of the base, not as a weight on each link.**
+A base accelerating upward at 9.81 m/s² is indistinguishable from inside from a
+base at rest in a gravitational field, so one line at the top of the recursion
+replaces a term in every link's force balance — and removes `n` chances to get a
+sign wrong in configurations nobody tested. It also makes an arm on a wall or a
+ceiling free rather than special: `setGravity` takes any vector, and a test
+asserts that reversing the field reverses every torque. The gravity torque is
+checked against a third derivation entirely — it is the gradient of the
+potential energy, which is a one-line sum over link heights sharing no code with
+the recursion, and the two agree to **9.05e-09 N·m**. See
+[ADR-0010](docs/adr/0010-dynamics-in-the-base-frame.md).
+
+**An inertia tensor that could not belong to a real body is refused.** Symmetric
+and positive definite is not enough: the principal moments must also satisfy the
+triangle inequality, because no distribution of mass makes one axis harder to
+spin than the other two together. Checking that needs the eigenvalues, so there
+is a closed-form symmetric 3×3 eigensolver that exists for this alone. It earns
+its place because an implausible inertia produces *plausible* torques — nothing
+downstream fails, the arm just needs numbers no real machine would, and the
+error gets blamed on the controller.
+
 **Multi-axis moves are driven by one path parameter, not one profile per axis.**
 Planning each axis separately and stretching the quick ones does synchronise the
 endpoints, and no axis exceeds a limit — and the path is still bent, because
@@ -305,8 +336,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 139 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 128 ordinary tests | Ahead of the threaded executor in WP-08; the eleven allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 157 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 144 ordinary tests | Ahead of the threaded executor in WP-08; the thirteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -319,7 +350,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Nine decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Ten decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -354,7 +385,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Eleven allocation tests are instrumentation rather than ordinary unit tests. They
+Thirteen allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate
@@ -398,6 +429,9 @@ no real-time scheduling:
 | `SerialChain::forward`, 6R | 175.7 | 176.6 | 527.7 | 0.018 % |
 | `SerialChain::jacobian`, 6R | 417.4 | 427.2 | 1029.7 | 0.043 % |
 | `SerialChain::inverse`, 6R seeded | 2209.1 | 2319.8 | 7499.1 | 0.232 % |
+| `DynamicChain::inverseDynamics`, 6R | 415.6 | 445.6 | 4967.7 | 0.045 % |
+| `DynamicChain::gravityTorque`, 6R | 400.3 | 428.6 | 1038.0 | 0.043 % |
+| `DynamicChain::massMatrix`, 6R CRBA | 399.8 | 427.0 | 1050.9 | 0.043 % |
 
 The maximum column is dominated by whatever else the machine was doing, and is
 reported anyway: a control loop is sized by its worst cycle, not its median.

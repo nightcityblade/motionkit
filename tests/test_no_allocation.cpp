@@ -20,6 +20,7 @@
 #include <malloc.h>
 #endif
 
+#include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
 #include "motionkit/core/trajectory.hpp"
@@ -332,6 +333,46 @@ TEST(TrajectoryRealtime, SamplingAStopDoesNotAllocate) {
 // ---------------------------------------------------------------------------
 // Kinematics
 // ---------------------------------------------------------------------------
+
+TEST(DynamicsRealtime, InverseDynamicsDoesNotAllocate) {
+  const DynamicChain arm = DynamicChain::sixAxisExample();
+  const std::array<Scalar, 6> q{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const std::array<Scalar, 6> qd{0.5, 0.2, -0.4, 0.9, -0.1, 0.3};
+  const std::array<Scalar, 6> qdd{-0.2, 1.1, 0.6, -0.7, 0.4, 0.8};
+  std::array<Scalar, 6> tau{};
+
+  // The whole reason the recursion carries its intermediates in fixed arrays
+  // rather than vectors: a torque computed on the control thread must not wait
+  // on an allocator.
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      (void)arm.inverseDynamics(q, qd, qdd, tau);
+      accumulator += tau[0];
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
+
+TEST(DynamicsRealtime, TheMassMatrixAndTheEnergiesDoNotAllocate) {
+  const DynamicChain arm = DynamicChain::sixAxisExample();
+  const std::array<Scalar, 6> q{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const std::array<Scalar, 6> qd{0.5, 0.2, -0.4, 0.9, -0.1, 0.3};
+  std::array<Scalar, 36> mass{};
+
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      (void)arm.massMatrix(q, mass);
+      accumulator += mass[0];
+      accumulator += arm.kineticEnergy(q, qd).value;
+      accumulator += arm.potentialEnergy(q).value;
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
 
 TEST(KinematicsRealtime, ForwardKinematicsAndTheJacobianDoNotAllocate) {
   const SerialChain arm = SerialChain::sixAxisExample();

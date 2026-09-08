@@ -84,6 +84,7 @@ flowchart BT
     se3["<b>se3</b><br/>SE3"]
     frame["<b>frame_graph</b><br/>FrameGraph, FrameId"]
     kin["<b>kinematics</b><br/>SerialChain, IkOptions"]
+    dyn["<b>dynamics</b><br/>DynamicChain, RigidBody"]
 
     ms["<b>motion_state</b><br/>MotionState, MotionSample"]
     jerk["<b>detail/jerk_segments</b><br/><i>implementation detail</i>"]
@@ -96,6 +97,8 @@ flowchart BT
     frame --> expected
     kin --> se3
     kin --> expected
+    dyn --> kin
+    dyn --> expected
     ms --> types
     jerk --> ms
     jerk --> types
@@ -106,7 +109,7 @@ flowchart BT
     classDef pose fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
     classDef motion fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef base fill:#f1f5f9,stroke:#64748b,color:#1e293b
-    class so3,se3,frame,kin pose
+    class so3,se3,frame,kin,dyn pose
     class ms,jerk,traj motion
     class types,expected base
 ```
@@ -114,9 +117,18 @@ flowchart BT
 ### The gap in the middle is the design
 
 Two subtrees rise from `types` and **never meet**. The pose side — SO3, SE3,
-FrameGraph, SerialChain — answers *where*. The motion side — MotionState,
-ScurveProfile, StopProfile — answers *when*. Nothing in `trajectory.hpp`
-includes `se3.hpp`, and nothing in `kinematics.hpp` includes `motion_state.hpp`.
+FrameGraph, SerialChain, DynamicChain — answers *where*, and now *what force*.
+The motion side — MotionState, ScurveProfile, StopProfile — answers *when*.
+Nothing in `trajectory.hpp` includes `se3.hpp`, and nothing in `kinematics.hpp`
+or `dynamics.hpp` includes `motion_state.hpp`.
+
+`dynamics` is the interesting test of that boundary, because it is plainly
+*about* time — it takes joint velocities and accelerations — and it still sits
+on the pose side. It takes them as bare `span<const Scalar>` rather than as a
+`MotionState`, so it never learns where those numbers came from. That is not an
+oversight to be tidied: a torque calculation has no use for the profile that
+produced the acceleration, and coupling it to one would mean a caller with
+measured encoder rates could not use it.
 
 That is deliberate, and it is the single most useful thing to know before
 adding to this library. Trajectory planning here is over **scalar axes**: a
