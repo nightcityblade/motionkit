@@ -55,12 +55,15 @@ struct RevoluteJoint {
   Vec3 axis{0.0, 0.0, 1.0};
   /// Any point lying on the axis.
   Vec3 point;
-  /// Travel limits in radians. The defaults are deliberately wider than any
-  /// real joint so that an unconfigured chain is unconstrained rather than
-  /// silently locked -- unlike MotionLimits, where silence must mean "may not
-  /// move", a joint limit of zero here would mean a chain that cannot be posed
-  /// at all, and that failure is not safer than the alternative.
+  /// Lower travel limit in radians.
+  ///
+  /// The defaults on both limits are deliberately wider than any real joint, so
+  /// that an unconfigured chain is unconstrained rather than silently locked --
+  /// unlike MotionLimits, where silence must mean "may not move", a joint limit
+  /// of zero here would mean a chain that cannot be posed at all, and that
+  /// failure is not safer than the alternative.
   Scalar lower{-6.2831853071795864769};
+  /// Upper travel limit in radians. See lower for why the default is wide.
   Scalar upper{6.2831853071795864769};
 };
 
@@ -68,8 +71,10 @@ struct RevoluteJoint {
 struct IkReport {
   /// Iterations actually taken.
   std::size_t iterations{0};
-  /// Remaining position error in metres, and orientation error in radians.
+  /// Remaining position error, in metres.
   Scalar position_error{0.0};
+  /// Remaining orientation error, in radians. Reported separately from
+  /// position_error because a distance and an angle do not add.
   Scalar orientation_error{0.0};
   /// Smallest manipulability seen along the way. Near zero means the solve
   /// passed close to a singularity, which is worth knowing even when it
@@ -84,6 +89,9 @@ struct IkReport {
 struct IkOptions {
   Scalar position_tolerance{1e-6};     ///< metres
   Scalar orientation_tolerance{1e-6};  ///< radians
+  /// Iteration ceiling. Reaching it yields DidNotConverge rather than the
+  /// best effort so far -- a pose that was not reached must not be returned as
+  /// though it were.
   std::size_t max_iterations{100};
 
   /// Damping factor, in the same units as the Jacobian.
@@ -128,6 +136,7 @@ class SerialChain {
   static Expected<SerialChain, KinematicsError> build(
       std::span<const RevoluteJoint> joints, const SE3& base_T_tool_at_zero);
 
+  /// The number of joints in the chain.
   [[nodiscard]] constexpr std::size_t jointCount() const noexcept { return count_; }
 
   /// Pose of the tool in the base frame at configuration `q`.
@@ -163,6 +172,10 @@ class SerialChain {
       const SE3& base_T_target, std::span<Scalar> q,
       const IkOptions& options = {}) const noexcept;
 
+  /// The joint at `index`, as it was supplied to build().
+  ///
+  /// Unchecked: `index` must be below jointCount(). Callers reading limits back
+  /// for a solve they are about to run already have that bound to hand.
   [[nodiscard]] const RevoluteJoint& joint(std::size_t index) const noexcept {
     return joints_[index];
   }

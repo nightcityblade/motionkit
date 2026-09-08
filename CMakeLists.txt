@@ -16,6 +16,7 @@ option(MOTIONKIT_BUILD_TESTS      "Build unit tests"           ${MOTIONKIT_IS_TO
 option(MOTIONKIT_BUILD_ALLOCATION_TESTS
        "Build global-allocation probe tests"                   ON)
 option(MOTIONKIT_BUILD_BENCHMARKS "Build micro-benchmarks"     OFF)
+option(MOTIONKIT_BUILD_DOCS       "Build the Doxygen API reference" OFF)
 option(MOTIONKIT_ENABLE_WERROR    "Treat warnings as errors"   ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -72,6 +73,10 @@ set_target_properties(motionkit_warnings PROPERTIES EXPORT_NAME warnings)
 if(MOTIONKIT_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(MOTIONKIT_BUILD_DOCS)
+  add_subdirectory(docs)
 endif()
 
 if(MOTIONKIT_BUILD_BENCHMARKS)

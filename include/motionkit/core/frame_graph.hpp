@@ -53,7 +53,11 @@ class FrameId {
  public:
   constexpr FrameId() noexcept = default;
 
+  /// True unless this is the default-constructed handle, which names no frame.
   [[nodiscard]] constexpr bool valid() const noexcept { return index_ != kInvalidIndex; }
+  /// Handle equality. Two handles from *different* graphs may compare equal
+  /// while naming different frames; handles are only meaningful to the graph
+  /// that issued them.
   constexpr bool operator==(const FrameId& other) const noexcept = default;
 
   /// Index into the owning graph, for diagnostics only.
@@ -158,7 +162,9 @@ class FrameGraph {
   /// Number of ancestors between `frame` and its root; a root has depth 0.
   [[nodiscard]] Expected<std::uint32_t, FrameError> depth(FrameId frame) const noexcept;
 
+  /// The number of frames declared, roots included.
   [[nodiscard]] std::size_t size() const noexcept { return nodes_.size(); }
+  /// True before any frame has been declared.
   [[nodiscard]] bool empty() const noexcept { return nodes_.empty(); }
 
  private:

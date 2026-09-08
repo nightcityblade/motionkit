@@ -41,15 +41,25 @@ class SO3 {
   /// This is the convention used by ROS, KDL and most industrial controllers.
   static SO3 fromRPY(Scalar roll, Scalar pitch, Scalar yaw);
 
+  /// Right-handed rotation of `angle` radians about the x axis.
   static SO3 rotX(Scalar angle);
+  /// Right-handed rotation of `angle` radians about the y axis.
   static SO3 rotY(Scalar angle);
+  /// Right-handed rotation of `angle` radians about the z axis.
   static SO3 rotZ(Scalar angle);
 
+  /// The real part of the stored quaternion. Non-negative by the class
+  /// invariant, so `w()` is `cos(angle / 2)` for a half-angle in [0, pi/2].
   [[nodiscard]] constexpr Scalar w() const noexcept { return w_; }
+  /// The i component of the stored quaternion.
   [[nodiscard]] constexpr Scalar x() const noexcept { return x_; }
+  /// The j component of the stored quaternion.
   [[nodiscard]] constexpr Scalar y() const noexcept { return y_; }
+  /// The k component of the stored quaternion.
   [[nodiscard]] constexpr Scalar z() const noexcept { return z_; }
 
+  /// The equivalent rotation matrix, row-major. Always a member of SO(3) to
+  /// within rounding, because the quaternion it is built from is always unit.
   [[nodiscard]] Mat3 matrix() const noexcept;
 
   /// Logarithmic map, inverse of fromRotationVector(). Magnitude lies in [0, pi].
@@ -60,8 +70,13 @@ class SO3 {
   /// rotation into yaw.
   void toRPY(Scalar& roll, Scalar& pitch, Scalar& yaw) const noexcept;
 
+  /// The inverse rotation. Exact: for a unit quaternion this is the conjugate,
+  /// so no division is involved and no error is introduced.
   [[nodiscard]] SO3 inverse() const noexcept;
+  /// Composition, applying `rhs` first and then `*this`. Renormalises, so a
+  /// long chain of compositions cannot drift off the unit sphere.
   SO3 operator*(const SO3& rhs) const noexcept;
+  /// Rotates the vector `v`, actively, within a fixed frame.
   Vec3 operator*(const Vec3& v) const noexcept;
 
   /// Geodesic (constant angular velocity) interpolation, t in [0, 1], taking

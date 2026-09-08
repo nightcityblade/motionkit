@@ -234,3 +234,54 @@ jobs:
                 -DCMAKE_PREFIX_PATH="$PWD/staged" -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/consumer/build
           /tmp/consumer/build/consumer
+
+  # The API reference is a gate before it is a website. Doxygen runs with
+  # WARN_AS_ERROR, so a public entity added without a doc comment fails here,
+  # in the same pull request that added it -- see ADR-0009. Verified against
+  # this runner's doxygen 1.9.8 and against 1.15.0 locally.
+  docs:
+    name: API reference builds clean
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build doxygen
+
+      - name: Record the Doxygen version
+        # The gate's exact warning set belongs to a Doxygen version. Printing it
+        # means a failure after a runner-image bump can be told apart from a
+        # failure caused by the commit under test.
+        run: doxygen --version
+
+      - name: Build the reference
+        run: |
+          cmake -S . -B build -DMOTIONKIT_BUILD_DOCS=ON -DMOTIONKIT_BUILD_TESTS=OFF
+          cmake --build build --target docs
+
+      - name: Upload for publication
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/docs/html
+
+  # Publication is opt-in, and off until the repository says otherwise.
+  #
+  # Deploying needs Pages set to the "GitHub Actions" source, and on a private
+  # repository it needs a plan that allows Pages at all. Neither is knowable
+  # from inside the workflow, so a job that simply ran would put a red cross on
+  # main for a setting nobody had been asked about. Set the repository variable
+  # PUBLISH_DOCS to "true" once Pages is configured, and this starts publishing.
+  publish-docs:
+    name: publish the reference
+    needs: docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLISH_DOCS == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

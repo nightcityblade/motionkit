@@ -32,10 +32,18 @@ concept ErrorEnum = std::is_enum_v<E> && requires { E::None; };
 /// type exists to prevent.
 template <typename T, ErrorEnum E>
 struct Expected {
+  /// The result, meaningful only when `error` is `None`. Default-constructed
+  /// otherwise, so reading it after a failure yields a zeroed T rather than
+  /// garbage -- still a bug, but a deterministic one.
   T value{};
+  /// Why there is no value, or `None` when there is one.
   E error{E::None};
 
+  /// True when a value is present. Explicit, so an Expected cannot silently
+  /// convert to bool in arithmetic or be compared against an integer.
   constexpr explicit operator bool() const noexcept { return error == E::None; }
+  /// True when a value is present. The named form, for use where an explicit
+  /// conversion would not fire -- inside a ternary, or an && chain.
   [[nodiscard]] constexpr bool hasValue() const noexcept { return error == E::None; }
 };
 

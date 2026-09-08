@@ -66,6 +66,10 @@ struct MotionLimits {
   /// decides whether the mechanics ring.
   Scalar max_jerk{0.0};
 
+  /// TrajectoryError::None when every limit is finite and strictly positive,
+  /// and the reason otherwise. Called by every planner before it does any work,
+  /// so a caller need not pre-check -- but calling it directly is how a UI
+  /// reports a bad limit set at the point the operator typed it.
   [[nodiscard]] TrajectoryError validate() const noexcept;
 
   /// Every limit scaled by `factor` in (0, 1] -- the usual feed-rate override.
@@ -119,8 +123,12 @@ class ScurveProfile {
   static Expected<ScurveProfile, TrajectoryError> plan(Scalar start, Scalar goal,
                                                        const MotionLimits& limits);
 
+  /// Total time of the move, in seconds.
   [[nodiscard]] constexpr Scalar duration() const noexcept { return duration_; }
+  /// Position the profile starts from.
   [[nodiscard]] constexpr Scalar startPosition() const noexcept { return start_; }
+  /// Position the profile ends at. Reached exactly at duration(), with zero
+  /// velocity and zero acceleration.
   [[nodiscard]] constexpr Scalar goalPosition() const noexcept { return goal_; }
 
   /// State at time `t`, clamped to [0, duration()].
@@ -190,9 +198,16 @@ class StopProfile {
  public:
   constexpr StopProfile() noexcept = default;
 
+  /// Plans a stop from an arbitrary state.
+  ///
+  /// `from` may carry any velocity and acceleration, including an acceleration
+  /// already beyond `limits` -- see the class note on why that is accepted
+  /// rather than refused. Fails when `from` is not finite, or when `limits`
+  /// does not validate.
   static Expected<StopProfile, TrajectoryError> plan(const MotionState& from,
                                                      const MotionLimits& limits);
 
+  /// Time from the start of the stop until the axis is at rest, in seconds.
   [[nodiscard]] constexpr Scalar duration() const noexcept { return duration_; }
 
   /// State at `t`. Before the stop begins this is the state handed in, with the
@@ -208,6 +223,9 @@ class StopProfile {
     return rest_position_ - start_.position;
   }
 
+  /// Absolute position the axis comes to rest at. stoppingDistance() is this
+  /// measured from the start; this is the number to compare against a hard
+  /// stop or a fence.
   [[nodiscard]] constexpr Scalar restPosition() const noexcept { return rest_position_; }
 
   /// Largest speed reached during the stop. Equal to the initial speed when the
@@ -221,6 +239,10 @@ class StopProfile {
     return peak_acceleration_;
   }
 
+  /// True when the state handed to plan() was already accelerating harder than
+  /// the limit allowed. The stop is still planned; this reports that the
+  /// machine was outside its envelope before the stop was asked for, which is
+  /// a fault to record rather than a reason to refuse.
   [[nodiscard]] constexpr bool startedOutsideAccelerationLimit() const noexcept {
     return started_outside_limit_;
   }
@@ -291,7 +313,10 @@ class SynchronizedTrajectory {
       std::span<const Scalar> start, std::span<const Scalar> goal,
       std::span<const MotionLimits> limits);
 
+  /// The number of axes this trajectory drives.
   [[nodiscard]] constexpr std::size_t axisCount() const noexcept { return axis_count_; }
+  /// Total time of the move, in seconds. One duration for all axes, because
+  /// they share a single path parameter -- see ADR-0006.
   [[nodiscard]] Scalar duration() const noexcept { return path_.duration(); }
 
   /// Writes axisCount() samples into `out`, one per axis, in the order given to

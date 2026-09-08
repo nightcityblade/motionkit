@@ -1,0 +1,86 @@
+# Doxygen configuration for motionkit.
+#
+# Deliberately minimal: every setting here differs from the Doxygen default and
+# is therefore a decision somebody made. The 400-line generated Doxyfile hides
+# the handful of choices that matter inside a wall of defaults nobody reads.
+#
+# Configured by CMake so PROJECT_NUMBER cannot drift from the project version.
+
+PROJECT_NAME           = "@PROJECT_NAME@"
+PROJECT_NUMBER         = "@PROJECT_VERSION@"
+PROJECT_BRIEF          = "@PROJECT_DESCRIPTION@"
+OUTPUT_DIRECTORY       = @DOXYGEN_OUTPUT_DIR@
+
+# --- what gets read ---------------------------------------------------------
+# Every markdown document a published page links to must itself be an input,
+# or Doxygen cannot resolve the link and -- with WARN_AS_ERROR -- fails. That
+# is a feature rather than a nuisance: it makes a broken cross-document link a
+# build failure instead of a 404 somebody finds later.
+INPUT                  = @DOXYGEN_INPUT_DIR@/include \
+                         @DOXYGEN_INPUT_DIR@/README.md \
+                         @DOXYGEN_INPUT_DIR@/CONTRIBUTING.md \
+                         @DOXYGEN_INPUT_DIR@/CHANGELOG.md \
+                         @DOXYGEN_INPUT_DIR@/docs
+FILE_PATTERNS          = *.hpp *.md
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = @DOXYGEN_INPUT_DIR@/README.md
+STRIP_FROM_PATH        = @DOXYGEN_INPUT_DIR@
+STRIP_FROM_INC_PATH    = @DOXYGEN_INPUT_DIR@/include
+
+# detail/ is where the implementation lives. It is not part of the promise the
+# library makes, so it is not part of the reference the library publishes --
+# a published symbol is one somebody may depend on.
+EXCLUDE_PATTERNS       = */detail/*
+EXCLUDE_SYMBOLS        = motionkit::detail::* detail::*
+
+# --- what counts as documented ----------------------------------------------
+# EXTRACT_ALL = NO is the setting that gives the gate below its teeth. With it
+# set to YES, Doxygen emits a page for every entity whether or not anyone wrote
+# a word about it, and WARN_IF_UNDOCUMENTED goes permanently quiet -- you get a
+# reference that looks complete and says nothing.
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# --- the gate ---------------------------------------------------------------
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+# WARN_IF_INCOMPLETE_DOC and WARN_NO_PARAMDOC are deliberately off. They demand
+# an @param and @return block on every entity, including size(), empty() and
+# valid(), where the only honest text is "@return The size." A rule that can
+# only be satisfied by writing that produces noise and teaches people to write
+# documentation that nobody reads. The gate below is the one that matters: an
+# entity must have a sentence saying what it is for. Parameter blocks are for
+# where they earn their place -- units, frames, and ownership.
+WARN_IF_INCOMPLETE_DOC = NO
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+
+# --- output -----------------------------------------------------------------
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_COLORSTYLE        = TOGGLE
+SORT_MEMBER_DOCS       = NO
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+TAB_SIZE               = 2
+
+# --- C++ specifics ----------------------------------------------------------
+# No Graphviz. The inheritance here is shallow enough that a generated diagram
+# would restate the class list, and the architecture drawings that do carry
+# information are hand-drawn C4 in docs/architecture.md.
+HAVE_DOT               = NO
+
+BUILTIN_STL_SUPPORT    = YES
+DISTRIBUTE_GROUP_DOC   = NO
+INLINE_INHERITED_MEMB  = NO
+SHOW_INCLUDE_FILES     = YES
+SOURCE_BROWSER         = YES
+REFERENCED_BY_RELATION = NO

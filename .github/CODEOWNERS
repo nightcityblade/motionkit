@@ -1,0 +1,16 @@
+# Review is required from the code owner on every path.
+#
+# One owner on a single-maintainer project is a statement of responsibility
+# rather than a routing rule: it makes the reviewer explicit, and it means a
+# branch protection rule has something to require.
+
+*                       @Onwcan
+
+# Called out separately because a change here changes the meaning of every
+# other check in the repository, and should be read as such rather than
+# skimmed as configuration.
+/.github/workflows/     @Onwcan
+/.clang-tidy            @Onwcan
+/.clang-format          @Onwcan
+/CMakePresets.json      @Onwcan
+/docs/adr/              @Onwcan

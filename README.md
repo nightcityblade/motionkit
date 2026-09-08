@@ -25,6 +25,7 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-06 | Hand-eye, TCP and base-frame calibration | Planned |
 | WP-12 | Blending and TOPP (needs a position target from a non-zero state) | Planned |
 | WP-12 | CUDA batch IK and collision checking | Planned |
+| WP-15 | API reference, architecture docs, contribution process | **Done** |
 
 139 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
 exercise the full suite. TSan exercises the 128 ordinary tests; the eleven
@@ -309,6 +310,41 @@ test wrong.
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
+| **Doxygen with `WARN_AS_ERROR`** | A public entity added without a doc comment fails the pull request that added it. Turning it on found 86 gaps and two comments that bound to the wrong member — see [ADR-0009](docs/adr/0009-the-api-reference-is-a-gate.md) |
+
+---
+
+## Documentation
+
+| Document | What it answers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
+| [docs/adr/](docs/adr/) | Nine decisions, each with the alternatives that lost and why |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
+| [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
+| [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
+
+The API reference is generated from the headers and **enforced**, not merely
+published:
+
+```bash
+cmake -S . -B build-docs -DMOTIONKIT_BUILD_DOCS=ON
+cmake --build build-docs --target docs
+```
+
+Doxygen is not required for an ordinary build — the option defaults to `OFF`,
+and CI is what keeps the reference honest. Publication to GitHub Pages is
+opt-in via the `PUBLISH_DOCS` repository variable, because a deploy job that
+assumed Pages was configured would put a red cross on `main` for a repository
+setting rather than for a commit.
+
+The single most useful thing to know before adding code here is in
+[docs/architecture.md](docs/architecture.md): the pose side (SO3, SE3,
+FrameGraph, SerialChain) and the motion side (MotionState, ScurveProfile,
+StopProfile) are two subtrees that **never meet**. Trajectory planning is over
+scalar axes and knows nothing about poses; kinematics knows nothing about time.
+Cartesian motion planning is the module that would join them, and it is
+deferred rather than missing.
 
 ---
 
