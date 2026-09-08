@@ -16,6 +16,7 @@ add_executable(motionkit_tests
   test_se3.cpp
   test_frame_graph.cpp
   test_frame_graph_realtime.cpp
+  test_kinematics.cpp
   test_trajectory.cpp)
 target_link_libraries(motionkit_tests
   PRIVATE motionkit::core motionkit::warnings GTest::gtest_main)

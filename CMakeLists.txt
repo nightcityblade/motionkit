@@ -45,6 +45,7 @@ add_library(motionkit_core
   src/core/so3.cpp
   src/core/se3.cpp
   src/core/frame_graph.cpp
+  src/core/kinematics.cpp
   src/core/trajectory.cpp)
 add_library(motionkit::core ALIAS motionkit_core)
 

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "motionkit/core/frame_graph.hpp"
+#include "motionkit/core/kinematics.hpp"
 #include "motionkit/core/trajectory.hpp"
 
 namespace motionkit {
@@ -157,6 +158,27 @@ int main() {
   report("maximumSafeSpeed", measure([&](std::size_t i) {
            const Scalar room = 0.001 + 0.001 * static_cast<Scalar>(i % 1000);
            g_sink = maximumSafeSpeed(room, axis).value;
+         }));
+
+  const SerialChain arm6 = SerialChain::sixAxisExample();
+  const std::array<Scalar, 6> pose{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const SE3 ik_target = arm6.forward(pose).value;
+  std::array<Scalar, kTwistSize * 6> jac{};
+
+  report("SerialChain::forward (6R)", measure([&](std::size_t) {
+           g_sink = arm6.forward(pose).value.translation().x;
+         }));
+
+  report("SerialChain::jacobian (6R)", measure([&](std::size_t) {
+           (void)arm6.jacobian(pose, jac);
+           g_sink = jac[0];
+         }));
+
+  report("SerialChain::inverse (6R, seeded)", measure([&](std::size_t i) {
+           std::array<Scalar, 6> q = pose;
+           q[0] += 0.02 * static_cast<Scalar>(i % 10);
+           const auto solved = arm6.inverse(ik_target, q);
+           g_sink = static_cast<Scalar>(solved.value.iterations);
          }));
 
   std::printf(

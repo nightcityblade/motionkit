@@ -21,6 +21,7 @@
 #endif
 
 #include "motionkit/core/frame_graph.hpp"
+#include "motionkit/core/kinematics.hpp"
 #include "motionkit/core/trajectory.hpp"
 
 namespace {
@@ -325,6 +326,46 @@ TEST(TrajectoryRealtime, SamplingAStopDoesNotAllocate) {
     }
   });
   EXPECT_NE(accumulator, 12345.6789);  // keep the loop alive
+  EXPECT_EQ(allocations, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Kinematics
+// ---------------------------------------------------------------------------
+
+TEST(KinematicsRealtime, ForwardKinematicsAndTheJacobianDoNotAllocate) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const std::array<Scalar, 6> q{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  std::array<Scalar, kTwistSize * 6> jac{};
+
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      accumulator += arm.forward(q).value.translation().x;
+      (void)arm.jacobian(q, jac);
+      accumulator += jac[0];
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);  // keep the loop alive
+  EXPECT_EQ(allocations, 0u);
+}
+
+// The stronger claim. A solver that allocates cannot run in the cycle that
+// needs its answer, which is how inverse kinematics ends up on another thread
+// with a queue in front of it and a latency nobody measured.
+TEST(KinematicsRealtime, SolvingInverseKinematicsDoesNotAllocate) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const std::array<Scalar, 6> truth{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const SE3 target = arm.forward(truth).value;
+
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 200; ++i) {
+      std::array<Scalar, 6> q = truth;
+      q[0] += 0.05 * static_cast<Scalar>(i % 5);
+      const auto report = arm.inverse(target, q);
+      ASSERT_TRUE(report.hasValue());
+    }
+  });
   EXPECT_EQ(allocations, 0u);
 }
 

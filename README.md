@@ -18,7 +18,7 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 |---|---|---|
 | WP-01 | Build system, CI, static analysis, install/export | **Done** |
 | WP-02 | SE(3) transforms, frame graph, tool modeling | **Done** |
-| WP-03 | Forward and inverse kinematics (6R) | Planned |
+| WP-03 | Forward and inverse kinematics (6R) | **Done** |
 | WP-04 | Rigid-body dynamics (RNEA, CRBA) | Planned |
 | WP-05 | Trajectory planning (jerk-limited S-curve, multi-axis synchronisation) | **Done** |
 | WP-11 | Stopping from an arbitrary state, and the safety envelope it defines | **Done** |
@@ -26,8 +26,8 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-12 | Blending and TOPP (needs a position target from a non-zero state) | Planned |
 | WP-12 | CUDA batch IK and collision checking | Planned |
 
-125 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 116 ordinary tests; the nine
+139 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 128 ordinary tests; the eleven
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -46,7 +46,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 116 tests: the nine tests that instrument global allocation are a
+runs 128 tests: the eleven tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -119,6 +119,26 @@ std::array<MotionSample, 6> setpoints{};
 move.value.sample(elapsed_seconds, setpoints);
 ```
 
+A six-axis arm is described by where its joints are, and solved from a seed:
+
+```cpp
+#include "motionkit/core/kinematics.hpp"
+
+const SerialChain arm = SerialChain::sixAxisExample();
+
+std::array<Scalar, 6> q{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+const SE3 base_T_tool = arm.forward(q).value;
+
+// Seeded from where the arm is now, so it does not turn itself inside out
+// reaching a pose it could also reach elbow-down.
+const auto report = arm.inverse(target, q);
+if (!report) {
+  return log(toString(report.error));
+}
+log("converged in {} iterations, closest approach to a singularity {}",
+    report.value.iterations, report.value.least_manipulability);
+```
+
 Stopping is planned from wherever the axis happens to be, which is the case
 that decides how far back a guard has to sit:
 
@@ -183,6 +203,37 @@ counts allocations proves nothing if the counter is inert. Failures come back as
 `Expected<T>` rather than exceptions: a lookup failing is ordinary — a sensor not
 yet calibrated — and `Disconnected` is deliberately a different answer from
 `UnknownFrame`.
+
+**Joints are described by an axis and a point, not by DH parameters.** A DH
+table needs a specific frame on every link, assigned by rules with real freedom
+in them, and there are **two incompatible conventions** in circulation that
+produce different arms from identical numbers. An axis direction and a point on
+that axis are both readable off a CAD model with a ruler, and there is one way
+to interpret them. Forward kinematics is then a product of exponentials reusing
+the same `SO3` exponential map, and each factor is "translate to the point,
+rotate, translate back" — checkable by inspection.
+
+**The Jacobian is tested against the derivative it claims to be.** Central
+differences at four configurations, including a singular one, agree with the
+analytic form to **3.8e-10**. This matters more than it looks: a sign or frame
+error in one of six rows produces a solver that converges for some targets and
+spirals for others, which is much harder to diagnose than one that never works.
+
+**Inverse kinematics is damped, and zero damping is not a neutral default.** The
+undamped step is the pseudo-inverse, which divides by the Jacobian's smallest
+singular value — and that goes to zero at a singularity. Measured with the wrist
+a tenth of a milliradian from straight, asked for a **1 mrad** tool rotation:
+
+| damping | commanded joint step |
+|---|---|
+| 0 | **3.188 rad** (183°) |
+| 1e-3 | **0.0019 rad** (0.11°) |
+
+A factor of about 1700 — asked to turn the tool a twentieth of a degree, the
+undamped solver swings a joint half a turn. A seeded solve costs **2.3 µs** and
+allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
+that needs the answer rather than on a thread with a queue in front of it. See
+[ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
 **Multi-axis moves are driven by one path parameter, not one profile per axis.**
 Planning each axis separately and stretching the quick ones does synchronise the
@@ -253,8 +304,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 125 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 116 ordinary tests | Ahead of the threaded executor in WP-08; the nine allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 139 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 128 ordinary tests | Ahead of the threaded executor in WP-08; the eleven allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -267,7 +318,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Nine allocation tests are instrumentation rather than ordinary unit tests. They
+Eleven allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate
@@ -306,8 +357,11 @@ no real-time scheduling:
 | `ScurveProfile::sample` | 4.0 | 4.1 | 12.1 | 0.0004 % |
 | `SynchronizedTrajectory::sample`, 6 axes | 8.6 | 8.8 | 14.8 | 0.001 % |
 | `SynchronizedTrajectory::plan`, 6 axes | 86.6 | 91.8 | 339.5 | 0.009 % |
-| `StopProfile::plan` | 17.4 | 17.5 | 25.7 | 0.002 % |
-| `maximumSafeSpeed` | 4.6 | 4.8 | 11.3 | 0.0005 % |
+| `StopProfile::plan` | 17.6 | 18.6 | 26.5 | 0.002 % |
+| `maximumSafeSpeed` | 4.8 | 5.1 | 11.7 | 0.0005 % |
+| `SerialChain::forward`, 6R | 175.7 | 176.6 | 527.7 | 0.018 % |
+| `SerialChain::jacobian`, 6R | 417.4 | 427.2 | 1029.7 | 0.043 % |
+| `SerialChain::inverse`, 6R seeded | 2209.1 | 2319.8 | 7499.1 | 0.232 % |
 
 The maximum column is dominated by whatever else the machine was doing, and is
 reported anyway: a control loop is sized by its worst cycle, not its median.
