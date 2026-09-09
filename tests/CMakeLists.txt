@@ -16,6 +16,7 @@ add_executable(motionkit_tests
   test_se3.cpp
   test_frame_graph.cpp
   test_frame_graph_realtime.cpp
+  test_cartesian.cpp
   test_calibration.cpp
   test_dynamics.cpp
   test_kinematics.cpp

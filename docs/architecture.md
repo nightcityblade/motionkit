@@ -117,42 +117,48 @@ flowchart BT
     class types,expected base
 ```
 
-### The gap in the middle is the design
+### The two sides, and the one module that joins them
 
-Two subtrees rise from `types` and **never meet**. The pose side — SO3, SE3,
-FrameGraph, SerialChain, DynamicChain, calibration — answers *where*, and
-now *what force*.
+Two subtrees rise from `types`. The pose side — SO3, SE3, FrameGraph,
+SerialChain, DynamicChain, calibration — answers *where*, and now *what force*.
 The motion side — MotionState, ScurveProfile, StopProfile — answers *when*.
-Nothing in `trajectory.hpp` includes `se3.hpp`, and nothing in `kinematics.hpp`
-or `dynamics.hpp` includes `motion_state.hpp`.
+`trajectory.hpp` includes no `se3.hpp`, and neither `kinematics.hpp` nor
+`dynamics.hpp` includes `motion_state.hpp`.
+
+For most of this library's life those two never met, and that separation is
+still the most useful thing to know before adding to it. Trajectory planning
+here is over **scalar axes**: a profile knows a start, a goal and a set of
+limits, and has no idea whether the number it moves is a joint angle, a rail
+position or a spindle override. Kinematics maps joint angles to poses and has no
+notion of time.
 
 `dynamics` is the interesting test of that boundary, because it is plainly
 *about* time — it takes joint velocities and accelerations — and it still sits
 on the pose side. It takes them as bare `span<const Scalar>` rather than as a
 `MotionState`, so it never learns where those numbers came from. That is not an
 oversight to be tidied: a torque calculation has no use for the profile that
-produced the acceleration, and coupling it to one would mean a caller with
-measured encoder rates could not use it.
+produced the acceleration, and coupling it to one would stop a caller with
+measured encoder rates from using it at all.
 
-That is deliberate, and it is the single most useful thing to know before
-adding to this library. Trajectory planning here is over **scalar axes**: a
-profile knows a start, a goal and a set of limits, and has no idea whether the
-number it is moving is a joint angle, a rail position or a spindle override.
-Kinematics maps joint angles to poses and has no notion of time.
+**`cartesian` is the exception, and the only one.** It depends on both sides,
+because a straight line in space traversed within joint limits cannot be
+described by either alone. It is the newest module and the most delicate, and
+the reason it was hard is visible in the diagram: everything else needs one
+subtree, and this needs the relationship *between* them — which is the Jacobian,
+and the Jacobian is different at every point on the path. Near a singularity it
+demands unbounded joint rates for an ordinary tool speed, and the measured cost
+is a factor of **7.4** on the duration of an otherwise identical 50 mm move.
 
-The consequence is that motionkit does **not** currently plan a Cartesian
-move — a straight line in space, with the joints solved along it and the joint
-velocity limits respected. That is the module which joins the two subtrees, and
-it is deferred (WP-12) rather than absent by oversight. It is genuinely harder
-than either side alone: joint-space limits do not map to a fixed Cartesian
-speed, because the Jacobian relating them changes along the path and blows up
-near a singularity. Bolting it onto either subtree would leak the other's
-concerns across the boundary drawn above.
+That it is the only crossing is worth preserving. A second module reaching
+across would make the boundary a suggestion; keeping the traffic through one
+place means the awkward part of the design is in one file with an ADR attached
+to it ([ADR-0012](adr/0012-cartesian-moves-are-paced-by-one-speed.md)).
 
-Until then, a caller wanting Cartesian motion samples a path themselves and
-calls `inverse()` per waypoint, which the 2.3 µs solve time makes viable inside
-a 1 kHz cycle. What they do not get for free is a guarantee that joint limits
-are respected *between* waypoints.
+What is still missing sits on the motion side rather than at the join.
+`ScurveProfile` is rest-to-rest, so consecutive Cartesian moves stop at every
+waypoint; blending needs a profile that starts from a non-zero state. That, full
+time-optimal path parameterisation, and CUDA batch inverse kinematics are the
+remaining WP-12b items.
 
 ### Rules that decide where code goes
 

@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "motionkit/core/cartesian.hpp"
 #include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
@@ -201,6 +202,28 @@ int main() {
   report("DynamicChain::massMatrix (6R, CRBA)", measure([&](std::size_t) {
            (void)dyn6.massMatrix(pose, mass);
            g_sink = mass[0];
+         }));
+
+  const std::array<MotionLimits, 6> joint_limits{
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0}};
+  const SE3 cartesian_goal{ik_target.rotation(),
+                           ik_target.translation() + Vec3{0.10, -0.05, 0.08}};
+  const auto cartesian = CartesianPlan::plan(arm6, pose, cartesian_goal, joint_limits);
+  std::array<Scalar, 6> stream{};
+
+  report("CartesianPlan::sample (6R, 33 knots)", measure([&](std::size_t i) {
+           const Scalar t =
+               cartesian.value.duration() * static_cast<Scalar>(i % 1000) / 1000.0;
+           (void)cartesian.value.sample(t, stream);
+           g_sink = stream[0];
+         }));
+
+  report("CartesianPlan::plan (6R, 33 knots)", measure([&](std::size_t) {
+           const auto replanned =
+               CartesianPlan::plan(arm6, pose, cartesian_goal, joint_limits);
+           g_sink = replanned.value.duration();
          }));
 
   std::printf(

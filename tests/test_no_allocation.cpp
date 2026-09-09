@@ -22,6 +22,7 @@
 #endif
 
 #include "motionkit/core/calibration.hpp"
+#include "motionkit/core/cartesian.hpp"
 #include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
@@ -349,6 +350,34 @@ TEST(TrajectoryRealtime, SamplingAStopDoesNotAllocate) {
 // ---------------------------------------------------------------------------
 // Kinematics
 // ---------------------------------------------------------------------------
+
+TEST(CartesianRealtime, SamplingAPlannedMoveDoesNotAllocate) {
+  // Planning a Cartesian move is expensive and happens once. Sampling it
+  // happens every control cycle, which is why the plan stores its knots in a
+  // fixed array and interpolates in place rather than holding a container.
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const std::array<Scalar, 6> start{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const SE3 from = arm.forward(start).value;
+  const SE3 to{from.rotation(), from.translation() + Vec3{0.10, -0.05, 0.08}};
+  const std::array<MotionLimits, 6> limits{
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+      MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0}};
+  const auto planned = CartesianPlan::plan(arm, start, to, limits);
+  ASSERT_TRUE(planned);
+
+  std::array<Scalar, 6> q{};
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      const Scalar t = planned.value.duration() * static_cast<Scalar>(i) / 1000.0;
+      (void)planned.value.sample(t, q);
+      accumulator += q[0] + planned.value.poseAtTime(t).translation().x;
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
 
 TEST(CalibrationRealtime, SolvingDoesNotAllocateHoweverManySamplesArrive) {
   // Calibration is a setup procedure, not a cyclic-task operation, so this is

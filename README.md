@@ -23,12 +23,12 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-05 | Trajectory planning (jerk-limited S-curve, multi-axis synchronisation) | **Done** |
 | WP-11 | Stopping from an arbitrary state, and the safety envelope it defines | **Done** |
 | WP-06 | Hand-eye and TCP calibration | **Done** |
-| WP-12 | Blending and TOPP (needs a position target from a non-zero state) | Planned |
-| WP-12 | CUDA batch IK and collision checking | Planned |
+| WP-12a | Straight-line Cartesian moves, paced by joint limits | **Done** |
+| WP-12b | Blending, full TOPP, CUDA batch IK and collision checking | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-171 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 157 ordinary tests; the fourteen
+188 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 173 ordinary tests; the fifteen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -47,7 +47,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 157 tests: the fourteen tests that instrument global allocation are a
+runs 173 tests: the fifteen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -236,6 +236,30 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**A Cartesian move is paced by one speed, and the path between knots is C1.**
+Linear interpolation between knots makes joint velocity piecewise constant, so
+acceleration is an *impulse* at every knot crossing — a plan that satisfies its
+own model and hands out a stream violating the limits dozens of times. Cubic
+Hermite with the same tangents the pacing uses is C1, and the test differentiates
+the **sampled output** rather than the internal model: peak **1.71 rad/s** of a
+2.0 limit, peak **4.51 rad/s²** of an 8.0 limit.
+
+**Joint acceleration has two sources and they compete for one limit.** The path
+bending in joint space grows with the *square* of path speed; the profile
+changing speed is linear in it. Bounding only the second respects every limit on
+paper and exceeds them on a curve, so the budget is split explicitly and the
+cornering half feeds back into the speed bound. See
+[ADR-0012](docs/adr/0012-cartesian-moves-are-paced-by-one-speed.md).
+
+**What a straight line costs, measured.** Near a singularity the Jacobian demands
+enormous joint speed for an ordinary tool speed: the same 50 mm move takes
+**8.15 s** at manipulability 6.2e-05 against **1.10 s** at 3.7e-03 — a factor of
+**7.4**, from geometry alone. And holding the line at all costs **2.30×** the
+time of letting the joints go where they like between the same endpoints. Both
+are worth knowing before promising a cycle time. The tool is exactly on the line
+at knots and within a reported **2.9e-05 m** between them — measured, not
+claimed.
+
 **Calibration refuses data that cannot determine the answer.** Six poses that
 touch a point from one orientation, or six camera stations whose every motion
 turns about the same axis, look like perfectly good measurement sets. They are
@@ -362,8 +386,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 171 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 157 ordinary tests | Ahead of the threaded executor in WP-08; the fourteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 188 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 173 ordinary tests | Ahead of the threaded executor in WP-08; the fifteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -376,7 +400,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Eleven decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Twelve decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -397,11 +421,13 @@ setting rather than for a commit.
 
 The single most useful thing to know before adding code here is in
 [docs/architecture.md](docs/architecture.md): the pose side (SO3, SE3,
-FrameGraph, SerialChain) and the motion side (MotionState, ScurveProfile,
-StopProfile) are two subtrees that **never meet**. Trajectory planning is over
-scalar axes and knows nothing about poses; kinematics knows nothing about time.
-Cartesian motion planning is the module that would join them, and it is
-deferred rather than missing.
+FrameGraph, SerialChain, DynamicChain) and the motion side (MotionState,
+ScurveProfile, StopProfile) are two subtrees that meet in exactly **one** place.
+Trajectory planning is over scalar axes and knows nothing about poses;
+kinematics knows nothing about time. `cartesian` is the sole crossing, because
+a straight line traversed within joint limits cannot be described by either
+side alone — and keeping it the only one means the awkward part of the design
+lives in one file.
 
 ---
 
@@ -411,7 +437,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Fourteen allocation tests are instrumentation rather than ordinary unit tests. They
+Fifteen allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate
@@ -458,6 +484,8 @@ no real-time scheduling:
 | `DynamicChain::inverseDynamics`, 6R | 415.6 | 445.6 | 4967.7 | 0.045 % |
 | `DynamicChain::gravityTorque`, 6R | 400.3 | 428.6 | 1038.0 | 0.043 % |
 | `DynamicChain::massMatrix`, 6R CRBA | 399.8 | 427.0 | 1050.9 | 0.043 % |
+| `CartesianPlan::sample`, 6R 33 knots | 17.9 | 18.4 | 28.5 | 0.002 % |
+| `CartesianPlan::plan`, 6R 33 knots | 76109 | 77373 | 87793 | 7.74 % |
 
 The maximum column is dominated by whatever else the machine was doing, and is
 reported anyway: a control loop is sized by its worst cycle, not its median.

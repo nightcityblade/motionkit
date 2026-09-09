@@ -20,10 +20,11 @@ Two caveats worth knowing before you spend an afternoon on them:
 
 - **TSan excludes the allocation tests.** They replace global `operator new`,
   which is exactly what TSan's runtime also does. `MOTIONKIT_BUILD_ALLOCATION_TESTS`
-  is off under that preset, so the count is 157 rather than 171.
+  is off under that preset, so the count is 173 rather than 188.
 - **`ScurveProfile` is rest-to-rest.** Planning to a position from a non-zero
-  velocity is WP-12 and not implemented. `StopProfile` does start from an
-  arbitrary state, which is a different problem.
+  velocity is WP-12b and not implemented, which is also why consecutive
+  Cartesian moves cannot be blended and stop at every waypoint. `StopProfile`
+  does start from an arbitrary state, which is a different problem.
 
 ## Before opening a pull request
 

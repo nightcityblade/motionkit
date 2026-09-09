@@ -31,6 +31,13 @@ bump as "something may have moved".
 
 ### Added
 
+- **Straight-line Cartesian moves** (WP-12a). `CartesianPlan` follows a line in
+  space with the orientation slerping along it, solving inverse kinematics at
+  knots seeded from one another and pacing the whole move so that no joint
+  exceeds its velocity or acceleration limit. Reports where the pace was set,
+  the closest approach to a singularity, and how far the tool leaves the line
+  between knots.
+  ([ADR-0012](docs/adr/0012-cartesian-moves-are-paced-by-one-speed.md))
 - **Tool-point and hand-eye calibration** (WP-06). `calibrateToolPoint` finds
   the tool tip from poses that touch one fixed point; `calibrateHandEye` finds a
   flange-mounted camera's pose from stations watching a fixed target. Both

@@ -167,6 +167,7 @@ jobs:
           #include <cmath>
           #include <cstddef>
           #include "motionkit/core/calibration.hpp"
+          #include "motionkit/core/cartesian.hpp"
           #include "motionkit/core/dynamics.hpp"
           #include "motionkit/core/frame_graph.hpp"
           #include "motionkit/core/kinematics.hpp"
@@ -261,6 +262,26 @@ jobs:
             const auto tip = calibrateToolPoint(touches);
             if (!tip || (tip.value.flange_t_tool - planted).norm() > 1e-9) {
               return 14;
+            }
+            // The cartesian header, which is the one that depends on both
+            // halves of the library, so it fails if either export is wrong.
+            const std::array<MotionLimits, 6> joint_limits{
+                MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+                MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0},
+                MotionLimits{2.0, 8.0, 60.0}, MotionLimits{2.0, 8.0, 60.0}};
+            const SE3 line_from = arm.forward(joints).value;
+            const SE3 line_to{line_from.rotation(),
+                              line_from.translation() + Vec3{0.05, 0.0, 0.0}};
+            const auto line = CartesianPlan::plan(arm, joints, line_to, joint_limits);
+            if (!line || !(line.value.duration() > 0.0)) {
+              return 15;
+            }
+            std::array<Scalar, 6> along{};
+            if (!line.value.sample(line.value.duration(), along)) {
+              return 16;
+            }
+            if (!arm.forward(along).value.isApprox(line_to, 1e-5, 1e-5)) {
+              return 17;
             }
             return 0;
           }
