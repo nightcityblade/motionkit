@@ -31,6 +31,13 @@ bump as "something may have moved".
 
 ### Added
 
+- **Tool-point and hand-eye calibration** (WP-06). `calibrateToolPoint` finds
+  the tool tip from poses that touch one fixed point; `calibrateHandEye` finds a
+  flange-mounted camera's pose from stations watching a fixed target. Both
+  refuse geometry that cannot determine the answer rather than returning a
+  plausible number, and both report residuals so a precise result can be told
+  from an imprecise one.
+  ([ADR-0011](docs/adr/0011-calibration-refuses-what-it-cannot-determine.md))
 - **Rigid-body dynamics** (WP-04). `DynamicChain` computes joint torques by
   recursive Newton-Euler and the joint-space mass matrix by the
   composite-rigid-body algorithm, both allocation-free and callable from a

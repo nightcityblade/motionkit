@@ -85,6 +85,7 @@ flowchart BT
     frame["<b>frame_graph</b><br/>FrameGraph, FrameId"]
     kin["<b>kinematics</b><br/>SerialChain, IkOptions"]
     dyn["<b>dynamics</b><br/>DynamicChain, RigidBody"]
+    cal["<b>calibration</b><br/>tool point, hand-eye"]
 
     ms["<b>motion_state</b><br/>MotionState, MotionSample"]
     jerk["<b>detail/jerk_segments</b><br/><i>implementation detail</i>"]
@@ -99,6 +100,8 @@ flowchart BT
     kin --> expected
     dyn --> kin
     dyn --> expected
+    cal --> se3
+    cal --> expected
     ms --> types
     jerk --> ms
     jerk --> types
@@ -109,7 +112,7 @@ flowchart BT
     classDef pose fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
     classDef motion fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef base fill:#f1f5f9,stroke:#64748b,color:#1e293b
-    class so3,se3,frame,kin,dyn pose
+    class so3,se3,frame,kin,dyn,cal pose
     class ms,jerk,traj motion
     class types,expected base
 ```
@@ -117,7 +120,8 @@ flowchart BT
 ### The gap in the middle is the design
 
 Two subtrees rise from `types` and **never meet**. The pose side — SO3, SE3,
-FrameGraph, SerialChain, DynamicChain — answers *where*, and now *what force*.
+FrameGraph, SerialChain, DynamicChain, calibration — answers *where*, and
+now *what force*.
 The motion side — MotionState, ScurveProfile, StopProfile — answers *when*.
 Nothing in `trajectory.hpp` includes `se3.hpp`, and nothing in `kinematics.hpp`
 or `dynamics.hpp` includes `motion_state.hpp`.

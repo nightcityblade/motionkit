@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -20,10 +21,14 @@
 #include <malloc.h>
 #endif
 
+#include "motionkit/core/calibration.hpp"
 #include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
+#include "motionkit/core/se3.hpp"
+#include "motionkit/core/so3.hpp"
 #include "motionkit/core/trajectory.hpp"
+#include "motionkit/core/types.hpp"
 
 namespace {
 
@@ -189,11 +194,22 @@ DeepTree buildDeepTree(std::uint32_t spine_depth, std::uint32_t branch_depth) {
 TEST(FrameGraphRealtime, TheAllocationCounterItselfWorks) {
   // A test that counts allocations is worthless if the counter is inert -- this
   // is the positive control for every assertion below.
-  const std::size_t allocations = allocationsDuring([] {
-    std::vector<int> v;
-    v.reserve(1024);
-    ASSERT_NE(v.data(), nullptr);
+  //
+  // The size arrives through a volatile read and the buffer is written and read
+  // back afterwards. Both are needed: given a compile-time size and no use of
+  // the contents, GCC at -O3 proves the vector is dead and deletes the
+  // allocation outright, and the positive control then reports zero -- which is
+  // indistinguishable from the counter being broken, and is the one failure
+  // this test exists to make impossible.
+  static volatile std::size_t requested = 1024;
+  const std::size_t size = requested;
+  std::size_t observed = 0;
+  const std::size_t allocations = allocationsDuring([&] {
+    std::vector<int> v(size, 7);
+    v[size / 2] = 11;
+    observed = v.size() + static_cast<std::size_t>(v[size / 2]);
   });
+  EXPECT_EQ(observed, size + 11u);
   EXPECT_GT(allocations, 0u);
 }
 
@@ -333,6 +349,38 @@ TEST(TrajectoryRealtime, SamplingAStopDoesNotAllocate) {
 // ---------------------------------------------------------------------------
 // Kinematics
 // ---------------------------------------------------------------------------
+
+TEST(CalibrationRealtime, SolvingDoesNotAllocateHoweverManySamplesArrive) {
+  // Calibration is a setup procedure, not a cyclic-task operation, so this is
+  // not about deadlines. It pins a design property: both solvers accumulate
+  // into fixed-size normal equations -- six unknowns for the tool point, four
+  // and three for hand-eye -- so their working set does not grow with the
+  // number of measurements. Thirty stations cost the same memory as three.
+  std::array<SE3, 30> flange{};
+  std::array<SE3, 30> views{};
+  const SE3 mounting{SO3::fromRPY(0.15, -0.62, 1.05), Vec3{0.043, -0.028, 0.091}};
+  const Vec3 tool{0.031, -0.017, 0.184};
+  const Vec3 touched{0.612, -0.204, 0.338};
+  std::array<SE3, 30> touches{};
+  for (std::size_t i = 0; i < flange.size(); ++i) {
+    const Scalar t = static_cast<Scalar>(i) * 0.21;
+    const SO3 turn = SO3::fromRPY(0.4 * std::sin(t), 0.5 * std::cos(t * 1.3), t * 0.7);
+    flange[i] = SE3{turn, Vec3{0.6 + 0.01 * t, 0.02 * t, 0.4 - 0.01 * t}};
+    views[i] = (flange[i] * mounting).inverse() * SE3{SO3{}, Vec3{1.1, 0.25, 0.05}};
+    touches[i] = SE3{turn, touched - (turn * tool)};
+  }
+
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 50; ++i) {
+      accumulator += calibrateToolPoint(touches).value.flange_t_tool.z;
+      accumulator +=
+          calibrateHandEye(flange, views).value.flange_T_camera.translation().z;
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
 
 TEST(DynamicsRealtime, InverseDynamicsDoesNotAllocate) {
   const DynamicChain arm = DynamicChain::sixAxisExample();

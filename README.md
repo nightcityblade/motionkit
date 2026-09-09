@@ -22,13 +22,13 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-04 | Rigid-body dynamics (RNEA, CRBA) | **Done** |
 | WP-05 | Trajectory planning (jerk-limited S-curve, multi-axis synchronisation) | **Done** |
 | WP-11 | Stopping from an arbitrary state, and the safety envelope it defines | **Done** |
-| WP-06 | Hand-eye, TCP and base-frame calibration | Planned |
+| WP-06 | Hand-eye and TCP calibration | **Done** |
 | WP-12 | Blending and TOPP (needs a position target from a non-zero state) | Planned |
 | WP-12 | CUDA batch IK and collision checking | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-157 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 144 ordinary tests; the thirteen
+171 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 157 ordinary tests; the fourteen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -47,7 +47,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 144 tests: the thirteen tests that instrument global allocation are a
+runs 157 tests: the fourteen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -236,6 +236,32 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**Calibration refuses data that cannot determine the answer.** Six poses that
+touch a point from one orientation, or six camera stations whose every motion
+turns about the same axis, look like perfectly good measurement sets. They are
+not: the problem is rank-deficient and the number that falls out is whatever the
+rounding left behind. `DegenerateGeometry` is a separate error from
+`NotEnoughSamples` precisely because more of the same useless pose does not
+help, and telling an operator "not enough samples" sends them to collect twenty
+more identical ones.
+
+**The hand-eye rotation is one linear system, not an average of pairwise
+guesses.** Written with quaternions, `A X = X B` becomes
+`(L(q_A) − R(q_B)) q_X = 0` — *linear*, so every station contributes to a single
+null-space problem. The usual approach solves each pair and averages, which
+requires averaging rotations, and there is no way to do that which is both
+simple and correct. Recovery from noise-free data is exact to **2.6e-15 rad**;
+with 0.2 mm and 0.2 mrad of wobble on every observation it degrades in
+proportion to **3.2e-04 rad**, and the reported residual is the same order as
+the error it is reporting. See
+[ADR-0011](docs/adr/0011-calibration-refuses-what-it-cannot-determine.md).
+
+**A calibration reports two residuals, because one hides the case that matters.**
+A tip known to a tenth of a millimetre and one known to five are the same
+struct. With a single touch displaced by 1 mm among six good ones, the RMS reads
+**3.6e-04 m** — sub-millimetre, fine — while the worst case reads **8.0e-04 m**.
+The average is exactly what a bad touch hides behind.
+
 **The mass matrix is computed twice, by two algorithms that share no derivation.**
 It could have come out of the recursive Newton-Euler code already written — one
 call per joint with a unit acceleration — for about twenty lines. The
@@ -336,8 +362,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 157 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 144 ordinary tests | Ahead of the threaded executor in WP-08; the thirteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 171 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 157 ordinary tests | Ahead of the threaded executor in WP-08; the fourteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -350,7 +376,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Ten decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Eleven decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -385,7 +411,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Thirteen allocation tests are instrumentation rather than ordinary unit tests. They
+Fourteen allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate

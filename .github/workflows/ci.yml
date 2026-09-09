@@ -165,6 +165,8 @@ jobs:
           cat > /tmp/consumer/main.cpp <<'EOT'
           #include <array>
           #include <cmath>
+          #include <cstddef>
+          #include "motionkit/core/calibration.hpp"
           #include "motionkit/core/dynamics.hpp"
           #include "motionkit/core/frame_graph.hpp"
           #include "motionkit/core/kinematics.hpp"
@@ -242,6 +244,23 @@ jobs:
             }
             if (!(effort > 1e-6)) {
               return 13;
+            }
+            // The calibration header. A tool offset is planted, the poses that
+            // would have touched one point with it are generated, and the
+            // offset must come back -- which exercises the exported solver
+            // rather than merely proving the header parses.
+            const Vec3 planted{0.031, -0.017, 0.184};
+            const Vec3 touched{0.612, -0.204, 0.338};
+            std::array<SE3, 4> touches{};
+            const std::array<SO3, 4> turns{
+                SO3::fromRPY(0.0, 0.0, 0.0), SO3::fromRPY(0.4, -0.3, 0.9),
+                SO3::fromRPY(-0.7, 0.5, 0.2), SO3::fromRPY(0.2, 1.1, -0.6)};
+            for (std::size_t i = 0; i < turns.size(); ++i) {
+              touches[i] = SE3{turns[i], touched - (turns[i] * planted)};
+            }
+            const auto tip = calibrateToolPoint(touches);
+            if (!tip || (tip.value.flange_t_tool - planted).norm() > 1e-9) {
+              return 14;
             }
             return 0;
           }
