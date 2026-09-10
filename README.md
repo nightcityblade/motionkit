@@ -27,11 +27,12 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-12b | Moves from a non-zero state (the piece blending needed) | **Done** |
 | WP-12c | Blended routes through waypoints, without stopping | **Done** |
 | WP-12d | Capsule collision checking and clearance | **Done** |
-| WP-12e | Full TOPP, CUDA batch IK | Planned |
+| WP-12e | Pacing by path difficulty (not full TOPP — see ADR-0016) | **Done** |
+| WP-12f | CUDA batch IK | Not planned — see ADR-0015 |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-222 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 205 ordinary tests; the seventeen
+227 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 210 ordinary tests; the seventeen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -50,7 +51,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 205 tests: the seventeen tests that instrument global allocation are a
+runs 210 tests: the seventeen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -238,6 +239,22 @@ undamped solver swings a joint half a turn. A seeded solve costs **2.3 µs** and
 allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
+
+**An optimisation that works on one shape of problem and not another, measured
+both ways.** A Cartesian move is driven by one profile on one parameter, so its
+speed is set by the *worst* knot on the path — one awkward stretch paces the
+whole move. Spreading the parameter by difficulty instead of by distance fixes
+that: a 50 mm move through a near-singular wrist falls from **8.15 s to 3.27 s**.
+
+On a route with blended corners the same change makes things **worse** —
+1.44 s to 2.31 s — so it is off by default and a test asserts the regression so
+it stays known. The mechanism: the schedule is computed from the joint path's
+curvature and then *changes* it, which is one step of a fixed-point iteration
+nobody has shown converges. On a smooth path the step is small; at a corner
+blending has already concentrated the difficulty and this overshoots. Damping was
+tried at several settings and never rescued the blended case, so there is no knob
+for it. It also costs path accuracy — knots serve two masters — which more knots
+buy back. See [ADR-0016](docs/adr/0016-spending-the-path-parameter-by-difficulty.md).
 
 **Skipping adjacent links is not enough for self-collision, and believing it is
 breaks the model.** Two links sharing a joint touch always, so everyone skips
@@ -440,8 +457,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 222 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 205 ordinary tests | Ahead of the threaded executor in WP-08; the seventeen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 227 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 210 ordinary tests | Ahead of the threaded executor in WP-08; the seventeen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -454,7 +471,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Fifteen decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Sixteen decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -543,6 +560,7 @@ no real-time scheduling:
 | `CartesianPlan::sample`, 6R 33 knots | 17.9 | 18.4 | 28.5 | 0.002 % |
 | `CartesianPlan::plan`, 6R 33 knots | 76109 | 77373 | 87793 | 7.74 % |
 | `CollisionModel::clearance`, 6R + 3 obstacles | 416.1 | 431.6 | 1013.2 | 0.043 % |
+| `CartesianPlan::plan`, paced by difficulty | 145466 | 148714 | 155124 | 14.87 % |
 
 The maximum column is dominated by whatever else the machine was doing, and is
 reported anyway: a control loop is sized by its worst cycle, not its median.

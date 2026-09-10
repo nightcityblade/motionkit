@@ -244,6 +244,14 @@ int main() {
            g_sink = replanned.value.duration();
          }));
 
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+  report("CartesianPlan::plan (6R, by difficulty)", measure([&](std::size_t) {
+           const auto replanned =
+               CartesianPlan::plan(arm6, pose, cartesian_goal, joint_limits, spread);
+           g_sink = replanned.value.duration();
+         }));
+
   const auto guard = CollisionModel::sixAxisExample();
   const std::array<Capsule, 3> obstacles{
       Capsule{Vec3{0.6, 0.0, 0.0}, Vec3{0.6, 0.0, 1.2}, 0.05},

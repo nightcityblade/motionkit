@@ -168,8 +168,11 @@ time. It is deliberately *not* wired into `cartesian`, because the obstacle set
 changes far more often than the arm does, and baking it into the planner would
 mean replanning to answer a question about a fence that moved.
 
-Full time-optimal path parameterisation and CUDA batch inverse kinematics are
-the remaining WP-12e items, and ADR-0015 says why neither is here yet.
+Pacing by path difficulty is in `cartesian` too, off by default, and takes most
+of what time-optimal path parameterisation would offer without giving up the
+jerk limit — on the paths where it helps at all. ADR-0016 measures both sides.
+CUDA batch inverse kinematics is not planned: GitHub's runners have no GPU, and
+nothing here rests on a claim CI cannot check.
 
 ### Rules that decide where code goes
 

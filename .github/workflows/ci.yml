@@ -335,6 +335,16 @@ jobs:
             if (!against || against.value.to_obstacles >= kNothingNear) {
               return 25;
             }
+            // Pacing by difficulty, through the installed package. The move is
+            // the one measured in ADR-0016, so a plan that quietly ignored the
+            // option would come back at the evenly-spread duration instead.
+            CartesianOptions spread;
+            spread.pace_by_difficulty = true;
+            const auto uneven =
+                CartesianPlan::plan(arm, joints, line_to, joint_limits, spread);
+            if (!uneven || !(uneven.value.duration() < line.value.duration())) {
+              return 26;
+            }
             return 0;
           }
           EOT

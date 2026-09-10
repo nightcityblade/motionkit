@@ -224,11 +224,12 @@ Scalar at(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots, std::size
 /// plan that asks the arm to turn itself inside out midway along a straight
 /// line, while every individual pose on it is correct.
 CartesianError solveKnots(const SerialChain& chain, std::span<const Scalar> q_start,
-                          const BlendedPath& path, std::size_t count,
+                          const BlendedPath& path, std::span<const Scalar> schedule,
                           const IkOptions& options,
                           std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
                           Scalar& least_manipulability) noexcept {
   const std::size_t joints = chain.jointCount();
+  const std::size_t count = schedule.size();
   std::array<Scalar, kMaxJoints> seed{};
   for (std::size_t j = 0; j < joints; ++j) {
     seed[j] = q_start[j];
@@ -236,9 +237,8 @@ CartesianError solveKnots(const SerialChain& chain, std::span<const Scalar> q_st
   }
   least_manipulability = chain.manipulability(q_start).value;
 
-  const auto span = static_cast<Scalar>(count - 1);
   for (std::size_t k = 1; k < count; ++k) {
-    const SE3 target = path.poseAt(static_cast<Scalar>(k) / span);
+    const SE3 target = path.poseAt(schedule[k]);
     const std::span<Scalar> working{seed.data(), joints};
     const auto solved = chain.inverse(target, working, options);
     if (!solved) {
@@ -295,6 +295,87 @@ KnotSlope slopeAt(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
                   at(knots, interior - 1, joint)) /
                  (step * step);
   return slope;
+}
+
+/// Where along the path each knot sits.
+///
+/// Uniform in `s` is the obvious schedule and the wrong one. A single
+/// badly-conditioned stretch caps the speed of the *whole* move, because one
+/// profile drives one parameter and its limit is whatever the worst knot
+/// requires. Spending the parameter unevenly -- densely where the arm is
+/// struggling, sparsely where it is not -- makes the difficulty roughly
+/// constant per unit of parameter, and then the single limit is no longer set
+/// by a place the arm spends almost no time in.
+///
+/// The measure of difficulty is the reciprocal of the path speed each knot
+/// permits, so the schedule is the normalised integral of that. Duration
+/// becomes the integral of `ds / smax(s)` rather than `1 / min(smax)`, and the
+/// first is never larger than the second.
+void difficultySchedule(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
+                        std::size_t joints, std::size_t count,
+                        std::span<const MotionLimits> joint_limits,
+                        Scalar cornering_share, std::span<Scalar> out) noexcept {
+  const auto span = static_cast<Scalar>(count - 1);
+  const Scalar step = 1.0 / span;
+  constexpr Scalar kStill = 1e-12;
+  // A knot where nothing moves imposes no cost and must not divide by zero.
+  constexpr Scalar kEasiest = 1e9;
+
+  std::array<Scalar, kMaxPathKnots> effort{};
+  for (std::size_t k = 0; k < count; ++k) {
+    Scalar quickest = kEasiest;
+    for (std::size_t j = 0; j < joints; ++j) {
+      const KnotSlope slope = slopeAt(knots, j, k, count, step);
+      const Scalar travel = std::abs(slope.first);
+      if (travel > kStill) {
+        quickest = std::min(quickest, joint_limits[j].max_velocity / travel);
+      }
+      // Cornering counts as difficulty too, and leaving it out is worse than
+      // not reparameterising at all. Equalising only the velocity term makes
+      // acceleration the binding constraint everywhere it was not already, and
+      // on a route whose corners were already the limit the move comes out
+      // *slower* than the schedule it replaced. Measured, before this was
+      // added: a blended staircase went from 1.44 s to 1.80 s.
+      const Scalar bend = std::abs(slope.second);
+      if (bend > kStill) {
+        quickest = std::min(quickest, std::sqrt(cornering_share *
+                                                joint_limits[j].max_acceleration / bend));
+      }
+    }
+    effort[k] = 1.0 / std::max(quickest, Scalar{1.0} / kEasiest);
+  }
+
+  std::array<Scalar, kMaxPathKnots> reached{};
+  reached[0] = 0.0;
+  for (std::size_t k = 1; k < count; ++k) {
+    reached[k] = reached[k - 1] + ((effort[k - 1] + effort[k]) * 0.5 * step);
+  }
+  const Scalar total = reached[count - 1];
+  if (!(total > 0.0)) {
+    // Nothing moves anywhere. Any schedule is as good as any other, and the
+    // uniform one is the one nothing downstream has to think about.
+    for (std::size_t k = 0; k < count; ++k) {
+      out[k] = static_cast<Scalar>(k) / span;
+    }
+    return;
+  }
+
+  // Invert: walk the cumulative effort and read off the s that reaches each
+  // equal share of it.
+  out[0] = 0.0;
+  out[count - 1] = 1.0;
+  std::size_t behind = 0;
+  for (std::size_t m = 1; m + 1 < count; ++m) {
+    const Scalar wanted = (static_cast<Scalar>(m) / span) * total;
+    while (behind + 2 < count && reached[behind + 1] < wanted) {
+      ++behind;
+    }
+    const Scalar gap = reached[behind + 1] - reached[behind];
+    const Scalar fraction =
+        gap > 0.0 ? std::clamp((wanted - reached[behind]) / gap, Scalar{0.0}, Scalar{1.0})
+                  : 0.0;
+    out[m] = (static_cast<Scalar>(behind) + fraction) * step;
+  }
 }
 
 /// Turns per-joint limits into limits on the path parameter.
@@ -411,13 +492,17 @@ void interpolate(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
 Scalar measureChordDeviation(const SerialChain& chain,
                              const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
                              std::size_t joints, std::size_t count,
+                             std::span<const Scalar> schedule,
                              const BlendedPath& path) noexcept {
   Scalar worst = 0.0;
   const auto span = static_cast<Scalar>(count - 1);
   std::array<Scalar, kMaxJoints> middle{};
   for (std::size_t k = 0; k + 1 < count; ++k) {
-    const Scalar s = (static_cast<Scalar>(k) + 0.5) / span;
-    interpolate(knots, joints, count, s, std::span<Scalar>{middle.data(), joints});
+    const Scalar between = (static_cast<Scalar>(k) + 0.5) / span;
+    interpolate(knots, joints, count, between, std::span<Scalar>{middle.data(), joints});
+    // Halfway between two knots in the parameter is halfway between their two
+    // path fractions, which are not evenly spaced once difficulty decides them.
+    const Scalar s = (schedule[k] + schedule[k + 1]) * 0.5;
     const auto pose = chain.forward(std::span<const Scalar>{middle.data(), joints});
     if (!pose) {
       continue;
@@ -471,11 +556,37 @@ Expected<CartesianPlan, CartesianError> CartesianPlan::planAlong(
   built.report_.waypoints = path.waypointCount();
   built.report_.corner_deviation = path.cornerDeviation();
 
+  const auto span = static_cast<Scalar>(options.knots - 1);
+  for (std::size_t k = 0; k < options.knots; ++k) {
+    built.at_s_[k] = static_cast<Scalar>(k) / span;
+  }
+  const std::span<Scalar> schedule{built.at_s_.data(), options.knots};
+
   if (const CartesianError error =
-          solveKnots(chain, q_start, built.path_, options.knots, options.ik, built.knots_,
+          solveKnots(chain, q_start, built.path_, schedule, options.ik, built.knots_,
                      built.report_.least_manipulability);
       error != CartesianError::None) {
     return {CartesianPlan{}, error};
+  }
+
+  if (options.pace_by_difficulty) {
+    // The first pass exists to find out where the difficulty is; the second
+    // solves at the places that answer chose. Solving twice rather than
+    // interpolating the first pass keeps every knot an exact inverse solution,
+    // which is what the chord-deviation figure is measured against.
+    std::array<Scalar, kMaxPathKnots> spread{};
+    difficultySchedule(built.knots_, joints, options.knots, joint_limits,
+                       options.cornering_share,
+                       std::span<Scalar>{spread.data(), options.knots});
+    for (std::size_t k = 0; k < options.knots; ++k) {
+      built.at_s_[k] = spread[k];
+    }
+    if (const CartesianError error =
+            solveKnots(chain, q_start, built.path_, schedule, options.ik, built.knots_,
+                       built.report_.least_manipulability);
+        error != CartesianError::None) {
+      return {CartesianPlan{}, error};
+    }
   }
 
   const Pacing pacing = paceFromKnots(built.knots_, joints, options.knots, joint_limits,
@@ -493,8 +604,8 @@ Expected<CartesianPlan, CartesianError> CartesianPlan::planAlong(
     return {CartesianPlan{}, CartesianError::LimitsNotUsable};
   }
   built.profile_ = profile.value;
-  built.report_.chord_deviation =
-      measureChordDeviation(chain, built.knots_, joints, options.knots, built.path_);
+  built.report_.chord_deviation = measureChordDeviation(
+      chain, built.knots_, joints, options.knots, schedule, built.path_);
   return {built, CartesianError::None};
 }
 
@@ -552,7 +663,21 @@ bool CartesianPlan::sample(Scalar t, std::span<Scalar> q) const noexcept {
 }
 
 SE3 CartesianPlan::poseAtTime(Scalar t) const noexcept {
-  return path_.poseAt(profile_.sample(t).position);
+  if (report_.knots < 2) {
+    return path_.poseAt(0.0);
+  }
+  // The profile runs on knot index, not on distance along the path, so it has
+  // to be read back through the schedule that decided where the knots went.
+  const Scalar parameter =
+      std::clamp(profile_.sample(t).position, Scalar{0.0}, Scalar{1.0});
+  const auto span = static_cast<Scalar>(report_.knots - 1);
+  const Scalar scaled = parameter * span;
+  auto index = static_cast<std::size_t>(scaled);
+  if (index + 1 >= report_.knots) {
+    index = report_.knots - 2;
+  }
+  const Scalar fraction = scaled - static_cast<Scalar>(index);
+  return path_.poseAt(at_s_[index] + (fraction * (at_s_[index + 1] - at_s_[index])));
 }
 
 }  // namespace motionkit

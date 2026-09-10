@@ -179,6 +179,34 @@ struct CartesianOptions {
   /// another; raise it to corner faster and accelerate more gently, lower it
   /// for the reverse.
   Scalar cornering_share{0.5};
+  /// Whether to spend the path parameter unevenly, densely where the arm is
+  /// struggling and sparsely where it is not.
+  ///
+  /// One profile drives one parameter, so its speed limit is whatever the worst
+  /// knot demands -- and with the parameter spread evenly in distance, one
+  /// awkward stretch paces the entire move however short that stretch is.
+  /// Spreading it by difficulty makes the limit describe the path as a whole.
+  ///
+  /// **Off by default, because it is not a universal win.** On a single
+  /// straight move it is a large one, and the more awkward the move the larger:
+  /// a 50 mm move through a badly-conditioned wrist falls from 8.15 s to
+  /// 3.27 s, and an ordinary 250 mm move from 3.52 s to 2.23 s.
+  ///
+  /// On a route with blended corners it makes things **worse** -- 1.44 s to
+  /// 2.31 s on a three-legged staircase. Blending has already arranged for the
+  /// difficulty to sit at the corners, and concentrating the parameter there as
+  /// well overshoots: the reparameterisation is computed from a curvature it
+  /// then changes, and at a corner it manufactures more of it.
+  ///
+  /// It also costs path accuracy, because knots serve two masters. Spending
+  /// them where the arm struggles takes them from where it does not, and the
+  /// straight stretches are then followed less exactly: `chord_deviation` on
+  /// that 250 mm move rises from 2.9e-05 m to 4.4e-04 m. Raising `knots` buys
+  /// it back.
+  ///
+  /// And it doubles the planning cost, since the knots are solved once to find
+  /// where the difficulty is and again where that answer put them.
+  bool pace_by_difficulty{false};
   /// How far a rounded corner may cut inside an interior waypoint, in metres.
   ///
   /// Ignored by a move with no interior waypoints. Zero rounds nothing, which
@@ -301,6 +329,13 @@ class CartesianPlan {
   /// the goal rather than an extrapolation off the end of the path.
   [[nodiscard]] bool sample(Scalar t, std::span<Scalar> q) const noexcept;
 
+  /// Where along the path knot `index` sits, as a fraction. Unchecked.
+  ///
+  /// Uniform only when `pace_by_difficulty` was off. Exposed because a plan
+  /// that spends its parameter unevenly is hard to reason about without being
+  /// able to see where it spent it.
+  [[nodiscard]] Scalar knotAt(std::size_t index) const noexcept { return at_s_[index]; }
+
   /// The tool pose the plan intends at time `t`.
   ///
   /// The pose on the ideal line, not the pose the sampled joints produce.
@@ -316,6 +351,9 @@ class CartesianPlan {
 
   BlendedPath path_;
   ScurveProfile profile_;
+  /// The path fraction each knot sits at. The profile runs on knot index, and
+  /// this is what turns that back into a place on the path.
+  std::array<Scalar, kMaxPathKnots> at_s_{};
   std::array<Scalar, kMaxPathKnots * kMaxJoints> knots_{};
   CartesianReport report_;
   std::size_t joints_{0};

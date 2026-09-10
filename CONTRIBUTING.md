@@ -20,7 +20,7 @@ Two caveats worth knowing before you spend an afternoon on them:
 
 - **TSan excludes the allocation tests.** They replace global `operator new`,
   which is exactly what TSan's runtime also does. `MOTIONKIT_BUILD_ALLOCATION_TESTS`
-  is off under that preset, so the count is 205 rather than 222.
+  is off under that preset, so the count is 210 rather than 227.
 - **`ScurveProfile` is rest-to-rest; `ReachProfile` is not.** Use the latter
   when the axis is already moving. `StopProfile` starts from an arbitrary state
   and has no position target, which is a third problem again.

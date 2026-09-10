@@ -520,6 +520,131 @@ TEST(CartesianBlending, RefusesRepeatedInteriorWaypointsAndOverlongRoutes) {
             CartesianError::WaypointCountUnsupported);
 }
 
+// --- spending the path parameter by difficulty --------------------------------
+
+TEST(CartesianPacing, OnASingleMoveThroughABadSpotItIsMuchFaster) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  // Wrist nearly straight, which is where this arm is worst conditioned.
+  const Vec awkward{0.3, -0.6, 1.0, 0.4, 0.02, -0.2};
+  const SE3 from = poseOf(awkward);
+  const SE3 to{from.rotation(), from.translation() + Vec3{0.05, 0.0, 0.0}};
+
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+
+  const auto even = CartesianPlan::plan(arm, awkward, to, jointLimits());
+  const auto uneven = CartesianPlan::plan(arm, awkward, to, jointLimits(), spread);
+  ASSERT_TRUE(even) << toString(even.error);
+  ASSERT_TRUE(uneven) << toString(uneven.error);
+
+  std::printf("bad spot: even %.4f s, by difficulty %.4f s -- %.2fx\n",
+              even.value.duration(), uneven.value.duration(),
+              even.value.duration() / uneven.value.duration());
+  // Spread evenly, the whole move runs at the speed the worst knot allows.
+  EXPECT_LT(uneven.value.duration(), even.value.duration() * 0.6);
+}
+
+TEST(CartesianPacing, OnABlendedRouteItIsWorseAndThatIsWhyItIsOff) {
+  // A negative result, asserted so that it stays known. Blending has already
+  // put the difficulty at the corners; concentrating the parameter there too
+  // overshoots, because the schedule is computed from a curvature it goes on to
+  // change. Anybody tempted to make this the default should fail this test.
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const Vec start = startConfiguration();
+  const std::vector<SE3> route = routeOf(poseOf(start));
+
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+
+  const auto even = CartesianPlan::planThrough(arm, start, route, jointLimits());
+  const auto uneven =
+      CartesianPlan::planThrough(arm, start, route, jointLimits(), spread);
+  ASSERT_TRUE(even) << toString(even.error);
+  ASSERT_TRUE(uneven) << toString(uneven.error);
+
+  std::printf("blended route: even %.4f s, by difficulty %.4f s\n", even.value.duration(),
+              uneven.value.duration());
+  EXPECT_GT(uneven.value.duration(), even.value.duration());
+}
+
+TEST(CartesianPacing, ItCostsPathAccuracyAndMoreKnotsBuyItBack) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const Vec start = startConfiguration();
+  const SE3 from = poseOf(start);
+  const SE3 to{from.rotation(), from.translation() + Vec3{0.25, -0.10, 0.05}};
+
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+  CartesianOptions denser = spread;
+  denser.knots = 65;
+
+  const auto even = CartesianPlan::plan(arm, start, to, jointLimits());
+  const auto uneven = CartesianPlan::plan(arm, start, to, jointLimits(), spread);
+  const auto refined = CartesianPlan::plan(arm, start, to, jointLimits(), denser);
+  ASSERT_TRUE(even);
+  ASSERT_TRUE(uneven);
+  ASSERT_TRUE(refined);
+
+  std::printf(
+      "chord deviation: even %.3e m, by difficulty %.3e m, and at 65 knots %.3e m\n",
+      even.value.report().chord_deviation, uneven.value.report().chord_deviation,
+      refined.value.report().chord_deviation);
+  // Knots serve two masters. Spending them where the arm struggles takes them
+  // from where it does not, and the easy stretches are followed less exactly.
+  EXPECT_GT(uneven.value.report().chord_deviation, even.value.report().chord_deviation);
+  EXPECT_LT(refined.value.report().chord_deviation,
+            uneven.value.report().chord_deviation);
+  // And it is still faster than spreading evenly, which is the whole point.
+  EXPECT_LT(uneven.value.duration(), even.value.duration());
+}
+
+TEST(CartesianPacing, TheStreamStillRespectsEveryJointLimit) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const Vec start = startConfiguration();
+  const SE3 from = poseOf(start);
+  const SE3 to{from.rotation(), from.translation() + Vec3{0.10, -0.15, 0.08}};
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+
+  const auto planned = CartesianPlan::plan(arm, start, to, jointLimits(), spread);
+  ASSERT_TRUE(planned) << toString(planned.error);
+  const Extremes worst = measureExtremes(planned.value);
+  std::printf("uneven stream: peak |qd| %.4f of 2.0, peak |qdd| %.4f of 8.0\n",
+              worst.velocity, worst.acceleration);
+  // Going faster must not mean going over. The pacing runs on the new
+  // parameter, so the limits are checked against the same sampled stream.
+  EXPECT_LT(worst.velocity, 2.0 * 1.02);
+  EXPECT_LT(worst.acceleration, 8.0 * 1.05);
+}
+
+TEST(CartesianPacing, TheKnotScheduleIsEvenWhenNotAskedToBeOtherwise) {
+  const SerialChain arm = SerialChain::sixAxisExample();
+  const Vec start = startConfiguration();
+  const SE3 from = poseOf(start);
+  const SE3 to{from.rotation(), from.translation() + Vec3{0.15, 0.0, 0.0}};
+
+  const auto even = CartesianPlan::plan(arm, start, to, jointLimits());
+  ASSERT_TRUE(even);
+  const std::size_t count = even.value.report().knots;
+  const auto span = static_cast<Scalar>(count - 1);
+  for (std::size_t k = 0; k < count; ++k) {
+    EXPECT_NEAR(even.value.knotAt(k), static_cast<Scalar>(k) / span, 1e-15) << k;
+  }
+
+  CartesianOptions spread;
+  spread.pace_by_difficulty = true;
+  const auto uneven = CartesianPlan::plan(arm, start, to, jointLimits(), spread);
+  ASSERT_TRUE(uneven);
+  EXPECT_NEAR(uneven.value.knotAt(0), 0.0, 1e-15) << "the ends are still the ends";
+  EXPECT_NEAR(uneven.value.knotAt(count - 1), 1.0, 1e-15);
+  Scalar most_uneven = 0.0;
+  for (std::size_t k = 0; k < count; ++k) {
+    most_uneven = std::max(
+        most_uneven, std::abs(uneven.value.knotAt(k) - (static_cast<Scalar>(k) / span)));
+  }
+  EXPECT_GT(most_uneven, 0.01) << "it was asked to be uneven and was not";
+}
+
 // --- refusals ----------------------------------------------------------------
 
 TEST(CartesianPlanning, ReportsAGoalItCannotReachAlongTheWholeLine) {

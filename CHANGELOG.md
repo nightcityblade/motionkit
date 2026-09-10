@@ -31,6 +31,12 @@ bump as "something may have moved".
 
 ### Added
 
+- **Pacing by path difficulty** (WP-12e), off by default. Spends the path
+  parameter unevenly — densely where the arm is struggling, sparsely where it
+  is not — so that one awkward stretch no longer paces a whole move. Large gain
+  on single moves, a measured loss on blended routes, and both are asserted by
+  tests. Not time-optimal path parameterisation, which has no jerk limit.
+  ([ADR-0016](docs/adr/0016-spending-the-path-parameter-by-difficulty.md))
 - **Capsule collision checking** (WP-12d). `CollisionModel` reports the closest
   approach between an arm's links and its surroundings, and between the arm's
   own links, at any configuration. Distances are signed, so an overlap reports
