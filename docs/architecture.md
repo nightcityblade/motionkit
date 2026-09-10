@@ -154,12 +154,11 @@ across would make the boundary a suggestion; keeping the traffic through one
 place means the awkward part of the design is in one file with an ADR attached
 to it ([ADR-0012](adr/0012-cartesian-moves-are-paced-by-one-speed.md)).
 
-What is still missing no longer sits on the motion side. `ReachProfile` plans
-from an arbitrary state to a position, which is the piece blending was waiting
-on; what remains is `CartesianPlan` using it, so that consecutive moves stop
-carrying every waypoint down to rest. That, full time-optimal path
-parameterisation, and CUDA batch inverse kinematics are the remaining WP-12c
-items.
+Routes through several waypoints are planned as one path under one profile, so
+they no longer stop in between — `cartesian` grew that rather than a new module,
+because a route and a single move differ only in their geometry and must not
+differ in how they are paced. Full time-optimal path parameterisation and CUDA
+batch inverse kinematics are the remaining WP-12d items.
 
 ### Rules that decide where code goes
 

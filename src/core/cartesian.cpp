@@ -28,6 +28,8 @@ std::string_view toString(CartesianError error) noexcept {
       return "NonFiniteInput";
     case CartesianError::KnotCountUnsupported:
       return "KnotCountUnsupported";
+    case CartesianError::WaypointCountUnsupported:
+      return "WaypointCountUnsupported";
     case CartesianError::UnreachableAlongPath:
       return "UnreachableAlongPath";
     case CartesianError::JointLimitAlongPath:
@@ -56,6 +58,153 @@ SE3 CartesianPath::poseAt(Scalar s) const noexcept {
 
 namespace {
 
+bool poseIsFinite(const SE3& pose) noexcept {
+  const SO3& r = pose.rotation();
+  return std::isfinite(pose.translation().squaredNorm()) && std::isfinite(r.w()) &&
+         std::isfinite(r.x()) && std::isfinite(r.y()) && std::isfinite(r.z());
+}
+
+}  // namespace
+
+Expected<BlendedPath, CartesianError> BlendedPath::through(std::span<const SE3> waypoints,
+                                                           Scalar radius) {
+  const std::size_t count = waypoints.size();
+  if (count < 2 || count > kMaxWaypoints) {
+    return {BlendedPath{}, CartesianError::WaypointCountUnsupported};
+  }
+  for (const SE3& pose : waypoints) {
+    if (!poseIsFinite(pose)) {
+      return {BlendedPath{}, CartesianError::NonFiniteInput};
+    }
+  }
+
+  std::array<Vec3, kMaxWaypoints> heading{};
+  std::array<Scalar, kMaxWaypoints> reach{};
+  Scalar total = 0.0;
+  for (std::size_t i = 0; i + 1 < count; ++i) {
+    const Vec3 leg = waypoints[i + 1].translation() - waypoints[i].translation();
+    reach[i] = leg.norm();
+    if (!(reach[i] > 0.0)) {
+      // Two waypoints in the same place are only a problem when there is a
+      // corner between them to round, because then there is no direction to
+      // leave by. Between just two, it is a pure reorientation or a move to
+      // where the arm already stands, and both are ordinary.
+      if (count > 2) {
+        return {BlendedPath{}, CartesianError::WaypointCountUnsupported};
+      }
+      heading[i] = Vec3{};
+    } else {
+      heading[i] = leg / reach[i];
+    }
+    total += reach[i];
+  }
+
+  // The path parameter runs on distance, which has nothing to measure when the
+  // tool does not move. A pure reorientation then gets an even share per
+  // segment instead -- not a length in disguise, which is why it is kept apart
+  // from length_ and never mixed with it. Adding some multiple of an angle to
+  // a distance would need a scale nobody can justify; see SE3::isApprox.
+  const bool by_distance = total > 0.0;
+
+  // A corner may take no more than half of either segment it touches, so two
+  // adjacent blends can never reach past each other however large a radius the
+  // caller asks for.
+  std::array<Scalar, kMaxWaypoints> cut{};
+  for (std::size_t k = 1; k + 1 < count; ++k) {
+    cut[k] =
+        std::min({std::max(radius, Scalar{0.0}), reach[k - 1] * 0.5, reach[k] * 0.5});
+  }
+
+  BlendedPath path;
+  path.turns_ = count;
+  for (std::size_t i = 0; i < count; ++i) {
+    path.orientations_[i] = waypoints[i].rotation();
+  }
+  path.orientation_at_[0] = 0.0;
+
+  Scalar measured = 0.0;
+  for (std::size_t i = 0; i + 1 < count; ++i) {
+    const Vec3 from = waypoints[i].translation() + (heading[i] * cut[i]);
+    const Vec3 to = waypoints[i + 1].translation() - (heading[i] * cut[i + 1]);
+    Piece straight;
+    straight.from = from;
+    straight.to = to;
+    straight.begins_at = measured;
+    straight.length = by_distance ? reach[i] - cut[i] - cut[i + 1] : 1.0;
+    path.pieces_[path.pieces_used_++] = straight;
+    path.length_ += reach[i] - cut[i] - cut[i + 1];
+    measured += straight.length;
+
+    if (i + 2 >= count) {
+      break;
+    }
+    const Vec3 corner = waypoints[i + 1].translation();
+    Piece bend;
+    bend.curved = true;
+    bend.from = to;
+    bend.via = corner;
+    bend.to = corner + (heading[i + 1] * cut[i + 1]);
+    bend.begins_at = measured;
+    // The control polygon bounds the arc and the chord is bounded by it, so
+    // their average is within a fraction of a percent for the shallow turns a
+    // blend actually makes. Exact Bezier arc length has no closed form, and s
+    // only has to be monotone and smooth.
+    bend.length = ((bend.from - corner).norm() + (bend.to - corner).norm() +
+                   (bend.to - bend.from).norm()) *
+                  0.5;
+    path.pieces_[path.pieces_used_++] = bend;
+    // The waypoint's orientation belongs where the path passes closest to it,
+    // which is the middle of the corner that replaced it.
+    path.orientation_at_[i + 1] = measured + (bend.length * 0.5);
+    path.length_ += bend.length;
+    measured += bend.length;
+
+    const Vec3 midpoint = (bend.from + (corner * 2.0) + bend.to) * 0.25;
+    path.corner_deviation_ = std::max(path.corner_deviation_, (midpoint - corner).norm());
+  }
+  path.orientation_at_[count - 1] = measured;
+  path.measure_ = measured;
+  return {path, CartesianError::None};
+}
+
+SE3 BlendedPath::poseAt(Scalar s) const noexcept {
+  if (pieces_used_ == 0) {
+    return SE3{};
+  }
+  const Scalar along = std::clamp(s, Scalar{0.0}, Scalar{1.0}) * measure_;
+
+  std::size_t index = 0;
+  for (std::size_t i = 0; i < pieces_used_; ++i) {
+    if (pieces_[i].length > 0.0 && along >= pieces_[i].begins_at) {
+      index = i;
+    }
+  }
+  const Piece& piece = pieces_[index];
+  const Scalar u =
+      piece.length > 0.0
+          ? std::clamp((along - piece.begins_at) / piece.length, Scalar{0.0}, Scalar{1.0})
+          : 0.0;
+  const Vec3 position = piece.curved ? (piece.from * ((1.0 - u) * (1.0 - u))) +
+                                           (piece.via * (2.0 * (1.0 - u) * u)) +
+                                           (piece.to * (u * u))
+                                     : piece.from + ((piece.to - piece.from) * u);
+
+  std::size_t leg = 0;
+  for (std::size_t i = 0; i + 1 < turns_; ++i) {
+    if (along >= orientation_at_[i]) {
+      leg = i;
+    }
+  }
+  const Scalar spread = orientation_at_[leg + 1] - orientation_at_[leg];
+  const Scalar fraction =
+      spread > 0.0
+          ? std::clamp((along - orientation_at_[leg]) / spread, Scalar{0.0}, Scalar{1.0})
+          : 0.0;
+  return SE3{orientations_[leg].slerp(orientations_[leg + 1], fraction), position};
+}
+
+namespace {
+
 /// One knot's worth of joint values inside the flat plan storage.
 Scalar& at(std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots, std::size_t knot,
            std::size_t joint) noexcept {
@@ -75,7 +224,7 @@ Scalar at(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots, std::size
 /// plan that asks the arm to turn itself inside out midway along a straight
 /// line, while every individual pose on it is correct.
 CartesianError solveKnots(const SerialChain& chain, std::span<const Scalar> q_start,
-                          const CartesianPath& path, std::size_t count,
+                          const BlendedPath& path, std::size_t count,
                           const IkOptions& options,
                           std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
                           Scalar& least_manipulability) noexcept {
@@ -262,7 +411,7 @@ void interpolate(const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
 Scalar measureChordDeviation(const SerialChain& chain,
                              const std::array<Scalar, kMaxPathKnots * kMaxJoints>& knots,
                              std::size_t joints, std::size_t count,
-                             const CartesianPath& path) noexcept {
+                             const BlendedPath& path) noexcept {
   Scalar worst = 0.0;
   const auto span = static_cast<Scalar>(count - 1);
   std::array<Scalar, kMaxJoints> middle{};
@@ -279,44 +428,48 @@ Scalar measureChordDeviation(const SerialChain& chain,
   return worst;
 }
 
-bool poseIsFinite(const SE3& pose) noexcept {
-  const SO3& r = pose.rotation();
-  return std::isfinite(pose.translation().squaredNorm()) && std::isfinite(r.w()) &&
-         std::isfinite(r.x()) && std::isfinite(r.y()) && std::isfinite(r.z());
+}  // namespace
+
+namespace {
+
+/// The checks that do not depend on how many waypoints there are.
+CartesianError checkInputs(const SerialChain& chain, std::span<const Scalar> q_start,
+                           std::span<const MotionLimits> joint_limits,
+                           const CartesianOptions& options) noexcept {
+  const std::size_t joints = chain.jointCount();
+  if (joints == 0 || q_start.size() != joints || joint_limits.size() != joints) {
+    return CartesianError::SizeMismatch;
+  }
+  if (options.knots < 3 || options.knots > kMaxPathKnots) {
+    return CartesianError::KnotCountUnsupported;
+  }
+  if (!(options.cornering_share > 0.0) || !(options.cornering_share < 1.0)) {
+    return CartesianError::LimitsNotUsable;
+  }
+  for (const MotionLimits& limit : joint_limits) {
+    if (limit.validate() != TrajectoryError::None) {
+      return CartesianError::LimitsNotUsable;
+    }
+  }
+  return CartesianError::None;
 }
 
 }  // namespace
 
-Expected<CartesianPlan, CartesianError> CartesianPlan::plan(
-    const SerialChain& chain, std::span<const Scalar> q_start, const SE3& base_T_goal,
+// A single straight move and a blended sequence differ only in the path they
+// are given; the knot solve, the pacing and the profile are identical. Keeping
+// them identical is deliberate -- a sequence that paced itself differently from
+// a single move would be a second set of limits to be wrong about.
+Expected<CartesianPlan, CartesianError> CartesianPlan::planAlong(
+    const SerialChain& chain, std::span<const Scalar> q_start, const BlendedPath& path,
     std::span<const MotionLimits> joint_limits, const CartesianOptions& options) {
   const std::size_t joints = chain.jointCount();
-  if (joints == 0 || q_start.size() != joints || joint_limits.size() != joints) {
-    return {CartesianPlan{}, CartesianError::SizeMismatch};
-  }
-  if (options.knots < 3 || options.knots > kMaxPathKnots) {
-    return {CartesianPlan{}, CartesianError::KnotCountUnsupported};
-  }
-  if (!(options.cornering_share > 0.0) || !(options.cornering_share < 1.0)) {
-    return {CartesianPlan{}, CartesianError::LimitsNotUsable};
-  }
-  for (const MotionLimits& limit : joint_limits) {
-    if (limit.validate() != TrajectoryError::None) {
-      return {CartesianPlan{}, CartesianError::LimitsNotUsable};
-    }
-  }
-  if (!poseIsFinite(base_T_goal)) {
-    return {CartesianPlan{}, CartesianError::NonFiniteInput};
-  }
-  const auto start_pose = chain.forward(q_start);
-  if (!start_pose) {
-    return {CartesianPlan{}, CartesianError::NonFiniteInput};
-  }
-
   CartesianPlan built;
   built.joints_ = joints;
-  built.path_ = CartesianPath::between(start_pose.value, base_T_goal);
+  built.path_ = path;
   built.report_.knots = options.knots;
+  built.report_.waypoints = path.waypointCount();
+  built.report_.corner_deviation = path.cornerDeviation();
 
   if (const CartesianError error =
           solveKnots(chain, q_start, built.path_, options.knots, options.ik, built.knots_,
@@ -343,6 +496,50 @@ Expected<CartesianPlan, CartesianError> CartesianPlan::plan(
   built.report_.chord_deviation =
       measureChordDeviation(chain, built.knots_, joints, options.knots, built.path_);
   return {built, CartesianError::None};
+}
+
+Expected<CartesianPlan, CartesianError> CartesianPlan::plan(
+    const SerialChain& chain, std::span<const Scalar> q_start, const SE3& base_T_goal,
+    std::span<const MotionLimits> joint_limits, const CartesianOptions& options) {
+  const std::array<SE3, 1> only{base_T_goal};
+  return planThrough(chain, q_start, only, joint_limits, options);
+}
+
+Expected<CartesianPlan, CartesianError> CartesianPlan::planThrough(
+    const SerialChain& chain, std::span<const Scalar> q_start,
+    std::span<const SE3> waypoints, std::span<const MotionLimits> joint_limits,
+    const CartesianOptions& options) {
+  if (const CartesianError error = checkInputs(chain, q_start, joint_limits, options);
+      error != CartesianError::None) {
+    return {CartesianPlan{}, error};
+  }
+  if (waypoints.empty() || waypoints.size() + 1 > kMaxWaypoints) {
+    return {CartesianPlan{}, CartesianError::WaypointCountUnsupported};
+  }
+  for (const SE3& pose : waypoints) {
+    if (!poseIsFinite(pose)) {
+      return {CartesianPlan{}, CartesianError::NonFiniteInput};
+    }
+  }
+  const auto start_pose = chain.forward(q_start);
+  if (!start_pose) {
+    return {CartesianPlan{}, CartesianError::NonFiniteInput};
+  }
+
+  // Where the arm is counts as the first waypoint. The caller supplies where to
+  // go, not where it already stands.
+  std::array<SE3, kMaxWaypoints> route{};
+  route[0] = start_pose.value;
+  for (std::size_t i = 0; i < waypoints.size(); ++i) {
+    route[i + 1] = waypoints[i];
+  }
+  const auto path = BlendedPath::through(
+      std::span<const SE3>{route.data(), waypoints.size() + 1}, options.blend_radius);
+  if (!path) {
+    return {CartesianPlan{}, path.error};
+  }
+
+  return planAlong(chain, q_start, path.value, joint_limits, options);
 }
 
 bool CartesianPlan::sample(Scalar t, std::span<Scalar> q) const noexcept {

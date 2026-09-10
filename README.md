@@ -25,11 +25,12 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-06 | Hand-eye and TCP calibration | **Done** |
 | WP-12a | Straight-line Cartesian moves, paced by joint limits | **Done** |
 | WP-12b | Moves from a non-zero state (the piece blending needed) | **Done** |
-| WP-12c | Blending itself, full TOPP, CUDA batch IK and collision checking | Planned |
+| WP-12c | Blended routes through waypoints, without stopping | **Done** |
+| WP-12d | Full TOPP, CUDA batch IK and collision checking | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-198 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 182 ordinary tests; the sixteen
+207 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 191 ordinary tests; the sixteen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -48,7 +49,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 182 tests: the sixteen tests that instrument global allocation are a
+runs 191 tests: the sixteen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -237,6 +238,24 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**Blending cuts the corner, and the library says how much.** A tool cannot turn
+a sharp corner at speed — its velocity would have to change direction
+instantaneously — so the only choice is between stopping at the waypoint and not
+passing exactly through it. Interior waypoints are replaced by a Bézier that
+leaves the line `blend_radius` early and rejoins it the same distance later.
+Measured on a three-legged staircase of 80 mm right angles: the tool passes each
+waypoint **14.1 mm** away at **0.158 m/s** — 73 % of peak, rather than stopping —
+and the route takes **1.44 s** against **1.83 s** planned as separate moves.
+Asking for exact corners with `blend_radius = 0` is supported and takes
+**3.02 s**, slightly more than double. Which of those you want is not something
+the library can decide, so it doesn't. See
+[ADR-0014](docs/adr/0014-blending-cuts-the-corner.md).
+
+**Two deviations are reported, never one.** `chord_deviation` is discretisation
+error and shrinks as knots are added; `corner_deviation` is the corner you asked
+to cut and does not. One combined number would let a caller add knots, watch it
+fall, and believe the corners were being hit more closely than they were.
+
 **A moving axis does not have to stop before it can follow a new target.**
 `ScurveProfile` starts at rest, so an axis already running can only use it by
 stopping first — which is exactly what makes a machine look broken. `ReachProfile`
@@ -403,8 +422,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 198 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 182 ordinary tests | Ahead of the threaded executor in WP-08; the sixteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 207 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 191 ordinary tests | Ahead of the threaded executor in WP-08; the sixteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -417,7 +436,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Thirteen decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Fourteen decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |

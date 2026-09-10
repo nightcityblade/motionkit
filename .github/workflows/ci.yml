@@ -295,6 +295,27 @@ jobs:
                 1e-9) {
               return 19;
             }
+            // A blended route, which is the one call that exercises the whole
+            // library at once: kinematics, the profiles and the new geometry.
+            const std::array<SE3, 3> route{
+                SE3{line_from.rotation(), line_from.translation() + Vec3{-0.08, 0.0, 0.0}},
+                SE3{line_from.rotation(),
+                    line_from.translation() + Vec3{-0.08, 0.0, -0.08}},
+                SE3{line_from.rotation(),
+                    line_from.translation() + Vec3{-0.16, 0.0, -0.08}}};
+            const auto weaving =
+                CartesianPlan::planThrough(arm, joints, route, joint_limits);
+            if (!weaving || !(weaving.value.report().corner_deviation > 0.0)) {
+              return 20;
+            }
+            if (weaving.value.report().waypoints != 4) {
+              return 21;
+            }
+            std::array<Scalar, 6> ended{};
+            if (!weaving.value.sample(weaving.value.duration(), ended) ||
+                !arm.forward(ended).value.isApprox(route.back(), 1e-5, 1e-5)) {
+              return 22;
+            }
             return 0;
           }
           EOT

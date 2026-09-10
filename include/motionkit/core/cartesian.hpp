@@ -29,6 +29,10 @@ enum class CartesianError : std::uint8_t {
   /// Fewer than three knots, or more than kMaxPathKnots. Two knots describe
   /// the endpoints and say nothing about the path between them.
   KnotCountUnsupported,
+  /// Fewer than one waypoint, more than kMaxWaypoints, or two in a row at the
+  /// same place. A repeated waypoint has no direction to leave by, so there is
+  /// no corner to round and no honest way to guess one.
+  WaypointCountUnsupported,
   /// The inverse solve did not converge somewhere along the path -- the line
   /// leaves the workspace, or passes too close to a singularity to solve.
   ///
@@ -82,6 +86,81 @@ class CartesianPath {
   Scalar angle_{0.0};
 };
 
+/// Waypoints a blended move may pass through, endpoints included.
+inline constexpr std::size_t kMaxWaypoints = 16;
+
+/// A path through several waypoints, with the corners rounded.
+///
+/// A sequence of straight moves planned one at a time stops at every waypoint,
+/// because each ends at rest. Planning them as one path does not stop -- but a
+/// tool cannot turn a sharp corner at speed either, since its velocity would
+/// have to change direction instantaneously. Something has to give, and what
+/// gives is the corner.
+///
+/// Each interior waypoint is replaced by a quadratic Bezier that leaves the
+/// incoming line `radius` before the corner and rejoins the outgoing line
+/// `radius` after it. The tool no longer passes through the waypoint, and
+/// `cornerDeviation()` says by how much. That is the trade stated plainly:
+/// **exact corners cost a full stop, and speed costs the corner.** A caller who
+/// needs the waypoint hit exactly asks for radius zero and gets the stop.
+///
+/// A path through two waypoints has no interior corner and is a straight line,
+/// which is why this type also serves the single-move case.
+class BlendedPath {
+ public:
+  /// An empty path of zero length.
+  BlendedPath() noexcept = default;
+
+  /// Builds a path through `waypoints`, rounding interior corners by at most
+  /// `radius` metres.
+  ///
+  /// The radius is reduced at any corner whose adjacent segments are too short
+  /// to give it up -- never more than half of either -- so blends can never
+  /// overlap or run past a neighbouring waypoint however large a radius is
+  /// asked for. Requires at least two waypoints and no more than
+  /// kMaxWaypoints.
+  static Expected<BlendedPath, CartesianError> through(std::span<const SE3> waypoints,
+                                                       Scalar radius);
+
+  /// The pose at path fraction `s`, clamped to [0, 1].
+  [[nodiscard]] SE3 poseAt(Scalar s) const noexcept;
+
+  /// Total path length in metres, following the rounded corners rather than
+  /// the sharp ones.
+  [[nodiscard]] Scalar length() const noexcept { return length_; }
+
+  /// The furthest any rounded corner falls from the waypoint it replaced, in
+  /// metres. Zero for a straight path.
+  [[nodiscard]] Scalar cornerDeviation() const noexcept { return corner_deviation_; }
+
+  /// How many waypoints the path was built from.
+  [[nodiscard]] constexpr std::size_t waypointCount() const noexcept { return turns_; }
+
+ private:
+  /// A straight run or a rounded corner. `via` is the Bezier control point and
+  /// is unused when the piece is straight.
+  struct Piece {
+    Vec3 from;
+    Vec3 via;
+    Vec3 to;
+    Scalar begins_at{0.0};
+    Scalar length{0.0};
+    bool curved{false};
+  };
+
+  std::array<Piece, 2 * kMaxWaypoints> pieces_{};
+  std::array<SO3, kMaxWaypoints> orientations_{};
+  /// Distance along the path at which each waypoint's orientation applies.
+  std::array<Scalar, kMaxWaypoints> orientation_at_{};
+  /// What the path parameter is measured in: the geometric length when the
+  /// tool moves, and an even share per segment when it only turns.
+  Scalar measure_{0.0};
+  std::size_t pieces_used_{0};
+  std::size_t turns_{0};
+  Scalar length_{0.0};
+  Scalar corner_deviation_{0.0};
+};
+
 /// How a Cartesian move should be discretised and solved.
 struct CartesianOptions {
   /// Knots the path is sampled at, including both endpoints. More knots follow
@@ -100,6 +179,12 @@ struct CartesianOptions {
   /// another; raise it to corner faster and accelerate more gently, lower it
   /// for the reverse.
   Scalar cornering_share{0.5};
+  /// How far a rounded corner may cut inside an interior waypoint, in metres.
+  ///
+  /// Ignored by a move with no interior waypoints. Zero rounds nothing, which
+  /// makes the path pass exactly through every waypoint and pays for it in the
+  /// speed the corners then permit.
+  Scalar blend_radius{0.05};
 };
 
 /// What the plan discovered about the move it just planned.
@@ -128,6 +213,16 @@ struct CartesianReport {
   Scalar chord_deviation{0.0};
   /// Knots actually used.
   std::size_t knots{0};
+  /// Waypoints the path was built from, endpoints included.
+  std::size_t waypoints{0};
+  /// The furthest a rounded corner fell from the waypoint it replaced, in
+  /// metres. Zero when nothing was rounded.
+  ///
+  /// Distinct from `chord_deviation`, which comes from discretising the path
+  /// into knots and shrinks as knots are added. This one is deliberate and does
+  /// not shrink: it is the corner the caller agreed to cut in exchange for not
+  /// stopping.
+  Scalar corner_deviation{0.0};
 };
 
 /// A straight-line Cartesian move, timed so that no joint exceeds its limits.
@@ -167,6 +262,23 @@ class CartesianPlan {
       const SerialChain& chain, std::span<const Scalar> q_start, const SE3& base_T_goal,
       std::span<const MotionLimits> joint_limits, const CartesianOptions& options = {});
 
+  /// Plans one continuous move through several waypoints, without stopping.
+  ///
+  /// `waypoints` are the poses to visit, in order, not including the pose the
+  /// arm starts at -- that comes from `q_start`. Interior corners are rounded
+  /// by `options.blend_radius`, so the tool passes near those waypoints rather
+  /// than through them, by at most `report().corner_deviation`. The first and
+  /// last are reached exactly.
+  ///
+  /// The whole sequence is one path under one profile, so it begins and ends at
+  /// rest and does not stop in between -- which is the entire point. It also
+  /// means the sequence is paced by its worst point throughout, exactly as a
+  /// single move is.
+  static Expected<CartesianPlan, CartesianError> planThrough(
+      const SerialChain& chain, std::span<const Scalar> q_start,
+      std::span<const SE3> waypoints, std::span<const MotionLimits> joint_limits,
+      const CartesianOptions& options = {});
+
   /// Total time of the move, in seconds.
   [[nodiscard]] Scalar duration() const noexcept { return profile_.duration(); }
 
@@ -174,7 +286,7 @@ class CartesianPlan {
   [[nodiscard]] constexpr std::size_t jointCount() const noexcept { return joints_; }
 
   /// The geometric path, independent of how fast it is traversed.
-  [[nodiscard]] const CartesianPath& path() const noexcept { return path_; }
+  [[nodiscard]] const BlendedPath& path() const noexcept { return path_; }
 
   /// What the plan discovered while planning.
   [[nodiscard]] const CartesianReport& report() const noexcept { return report_; }
@@ -196,7 +308,13 @@ class CartesianPlan {
   [[nodiscard]] SE3 poseAtTime(Scalar t) const noexcept;
 
  private:
-  CartesianPath path_;
+  /// Everything both entry points share once the geometry is decided. Private
+  /// because it reaches into the object it is building.
+  static Expected<CartesianPlan, CartesianError> planAlong(
+      const SerialChain& chain, std::span<const Scalar> q_start, const BlendedPath& path,
+      std::span<const MotionLimits> joint_limits, const CartesianOptions& options);
+
+  BlendedPath path_;
   ScurveProfile profile_;
   std::array<Scalar, kMaxPathKnots * kMaxJoints> knots_{};
   CartesianReport report_;

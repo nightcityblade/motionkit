@@ -20,12 +20,14 @@ Two caveats worth knowing before you spend an afternoon on them:
 
 - **TSan excludes the allocation tests.** They replace global `operator new`,
   which is exactly what TSan's runtime also does. `MOTIONKIT_BUILD_ALLOCATION_TESTS`
-  is off under that preset, so the count is 182 rather than 198.
+  is off under that preset, so the count is 191 rather than 207.
 - **`ScurveProfile` is rest-to-rest; `ReachProfile` is not.** Use the latter
-  when the axis is already moving. Consecutive Cartesian moves still stop at
-  every waypoint, but that is now `CartesianPlan` not using `ReachProfile`
-  rather than the profile being missing. `StopProfile` starts from an arbitrary
-  state and has no position target, which is a third problem again.
+  when the axis is already moving. `StopProfile` starts from an arbitrary state
+  and has no position target, which is a third problem again.
+- **A route through waypoints is one plan, not several.** `planThrough` does not
+  stop in between; planning each leg with `plan` does, because each leg ends at
+  rest. The cost of not stopping is that interior waypoints are missed by
+  `corner_deviation`.
 
 ## Before opening a pull request
 

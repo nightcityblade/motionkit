@@ -31,6 +31,12 @@ bump as "something may have moved".
 
 ### Added
 
+- **Blended routes through waypoints** (WP-12c). `CartesianPlan::planThrough`
+  plans a whole sequence as one path under one profile, so the tool does not
+  stop at intermediate waypoints. Interior corners are rounded by a configurable
+  radius, clamped so adjacent blends can never overlap, and the resulting miss
+  is reported separately from the discretisation error.
+  ([ADR-0014](docs/adr/0014-blending-cuts-the-corner.md))
 - **Moves from an axis that is already moving** (WP-12b). `ReachProfile` plans
   a jerk-limited move to a position from any `MotionState` -- mid-move, at
   speed, mid-acceleration -- arriving at rest. Reports whether the move had to
