@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "motionkit/core/cartesian.hpp"
+#include "motionkit/core/collision.hpp"
 #include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
@@ -241,6 +242,16 @@ int main() {
            const auto replanned =
                CartesianPlan::plan(arm6, pose, cartesian_goal, joint_limits);
            g_sink = replanned.value.duration();
+         }));
+
+  const auto guard = CollisionModel::sixAxisExample();
+  const std::array<Capsule, 3> obstacles{
+      Capsule{Vec3{0.6, 0.0, 0.0}, Vec3{0.6, 0.0, 1.2}, 0.05},
+      Capsule{Vec3{-0.5, 0.4, 0.3}, Vec3{-0.5, 0.4, 0.3}, 0.10},
+      Capsule{Vec3{0.0, -0.7, 0.0}, Vec3{0.4, -0.7, 0.9}, 0.03}};
+
+  report("CollisionModel::clearance (6R, 3 obstacles)", measure([&](std::size_t) {
+           g_sink = guard.value.clearance(pose, obstacles).value.distance;
          }));
 
   std::printf(

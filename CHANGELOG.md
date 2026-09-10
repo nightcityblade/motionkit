@@ -31,6 +31,13 @@ bump as "something may have moved".
 
 ### Added
 
+- **Capsule collision checking** (WP-12d). `CollisionModel` reports the closest
+  approach between an arm's links and its surroundings, and between the arm's
+  own links, at any configuration. Distances are signed, so an overlap reports
+  its depth. Self and obstacle clearances are reported separately because one
+  routinely masks the other. Takes an allowed-collision set, without which a
+  spherical wrist reports a collision while parked.
+  ([ADR-0015](docs/adr/0015-collision-checking-in-capsules.md))
 - **Blended routes through waypoints** (WP-12c). `CartesianPlan::planThrough`
   plans a whole sequence as one path under one profile, so the tool does not
   stop at intermediate waypoints. Interior corners are rounded by a configurable

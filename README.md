@@ -26,11 +26,12 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-12a | Straight-line Cartesian moves, paced by joint limits | **Done** |
 | WP-12b | Moves from a non-zero state (the piece blending needed) | **Done** |
 | WP-12c | Blended routes through waypoints, without stopping | **Done** |
-| WP-12d | Full TOPP, CUDA batch IK and collision checking | Planned |
+| WP-12d | Capsule collision checking and clearance | **Done** |
+| WP-12e | Full TOPP, CUDA batch IK | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-207 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 191 ordinary tests; the sixteen
+222 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 205 ordinary tests; the seventeen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -49,7 +50,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 191 tests: the sixteen tests that instrument global allocation are a
+runs 205 tests: the seventeen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -238,6 +239,23 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**Skipping adjacent links is not enough for self-collision, and believing it is
+breaks the model.** Two links sharing a joint touch always, so everyone skips
+adjacent pairs. But a spherical wrist turns its last three links about nearly one
+point, so links *two* apart overlap at every configuration too — and a model with
+only the adjacent rule reports a collision while the arm is parked. Nobody debugs
+that; they switch collision checking off, and then the cell has none. `build`
+takes an allowed-collision set, and the dullest test in the repo asserts the
+example arm is clear while standing still.
+
+**Self-clearance and obstacle clearance are reported apart.** Returning only the
+overall minimum was the first design and the tests killed it: a straight arm's own
+links sit **0.22 m** apart, so the overall minimum reports 0.22 regardless of where
+an obstacle is, until the obstacle is nearer than the arm is to itself. An obstacle
+30 cm away became invisible. Not a bug in the arithmetic — a question answered so
+literally it stopped being useful. See
+[ADR-0015](docs/adr/0015-collision-checking-in-capsules.md).
+
 **Blending cuts the corner, and the library says how much.** A tool cannot turn
 a sharp corner at speed — its velocity would have to change direction
 instantaneously — so the only choice is between stopping at the waypoint and not
@@ -422,8 +440,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 207 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 191 ordinary tests | Ahead of the threaded executor in WP-08; the sixteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 222 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 205 ordinary tests | Ahead of the threaded executor in WP-08; the seventeen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -436,7 +454,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Fourteen decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Fifteen decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -473,7 +491,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Sixteen allocation tests are instrumentation rather than ordinary unit tests. They
+Seventeen allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate
@@ -524,6 +542,7 @@ no real-time scheduling:
 | `DynamicChain::massMatrix`, 6R CRBA | 399.8 | 427.0 | 1050.9 | 0.043 % |
 | `CartesianPlan::sample`, 6R 33 knots | 17.9 | 18.4 | 28.5 | 0.002 % |
 | `CartesianPlan::plan`, 6R 33 knots | 76109 | 77373 | 87793 | 7.74 % |
+| `CollisionModel::clearance`, 6R + 3 obstacles | 416.1 | 431.6 | 1013.2 | 0.043 % |
 
 The maximum column is dominated by whatever else the machine was doing, and is
 reported anyway: a control loop is sized by its worst cycle, not its median.

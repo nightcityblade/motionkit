@@ -86,6 +86,7 @@ flowchart BT
     kin["<b>kinematics</b><br/>SerialChain, IkOptions"]
     dyn["<b>dynamics</b><br/>DynamicChain, RigidBody"]
     cal["<b>calibration</b><br/>tool point, hand-eye"]
+    col["<b>collision</b><br/>Capsule, CollisionModel"]
 
     ms["<b>motion_state</b><br/>MotionState, MotionSample"]
     jerk["<b>detail/jerk_segments</b><br/><i>implementation detail</i>"]
@@ -102,6 +103,8 @@ flowchart BT
     dyn --> expected
     cal --> se3
     cal --> expected
+    col --> kin
+    col --> expected
     ms --> types
     jerk --> ms
     jerk --> types
@@ -112,7 +115,7 @@ flowchart BT
     classDef pose fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
     classDef motion fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef base fill:#f1f5f9,stroke:#64748b,color:#1e293b
-    class so3,se3,frame,kin,dyn,cal pose
+    class so3,se3,frame,kin,dyn,cal,col pose
     class ms,jerk,traj motion
     class types,expected base
 ```
@@ -157,8 +160,16 @@ to it ([ADR-0012](adr/0012-cartesian-moves-are-paced-by-one-speed.md)).
 Routes through several waypoints are planned as one path under one profile, so
 they no longer stop in between — `cartesian` grew that rather than a new module,
 because a route and a single move differ only in their geometry and must not
-differ in how they are paced. Full time-optimal path parameterisation and CUDA
-batch inverse kinematics are the remaining WP-12d items.
+differ in how they are paced.
+
+`collision` is the newest module and sits on the pose side beside `dynamics`: it
+depends on `kinematics` for where the links are and on nothing that knows about
+time. It is deliberately *not* wired into `cartesian`, because the obstacle set
+changes far more often than the arm does, and baking it into the planner would
+mean replanning to answer a question about a fence that moved.
+
+Full time-optimal path parameterisation and CUDA batch inverse kinematics are
+the remaining WP-12e items, and ADR-0015 says why neither is here yet.
 
 ### Rules that decide where code goes
 

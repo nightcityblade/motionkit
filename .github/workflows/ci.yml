@@ -168,6 +168,7 @@ jobs:
           #include <cstddef>
           #include "motionkit/core/calibration.hpp"
           #include "motionkit/core/cartesian.hpp"
+          #include "motionkit/core/collision.hpp"
           #include "motionkit/core/dynamics.hpp"
           #include "motionkit/core/frame_graph.hpp"
           #include "motionkit/core/kinematics.hpp"
@@ -316,6 +317,24 @@ jobs:
                 !arm.forward(ended).value.isApprox(route.back(), 1e-5, 1e-5)) {
               return 22;
             }
+            // The collision header. A parked arm must be clear of itself --
+            // the check that fails first if the exported allowed-collision set
+            // did not survive the install.
+            const auto guard = CollisionModel::sixAxisExample();
+            if (!guard) {
+              return 23;
+            }
+            const std::array<Scalar, 6> parked{};
+            const auto nearest = guard.value.clearance(parked, {});
+            if (!nearest || !(nearest.value.to_self > 0.0)) {
+              return 24;
+            }
+            const std::array<Capsule, 1> fence{
+                Capsule{Vec3{0.30, 0.0, 0.0}, Vec3{0.30, 0.0, 1.2}, 0.05}};
+            const auto against = guard.value.clearance(parked, fence);
+            if (!against || against.value.to_obstacles >= kNothingNear) {
+              return 25;
+            }
             return 0;
           }
           EOT
@@ -348,10 +367,15 @@ jobs:
           cmake --build build --target docs
 
       - name: Upload for publication
-        # Deliberately still v3. It is a composite action with no Node runtime
-        # of its own, so it is not part of the Node 20 deprecation, and v3 with
-        # deploy-pages@v5 is the pairing GitHub ships in its own Pages starter
-        # workflow. Newer majors exist; none of them buy anything here.
+        # Deliberately still v3, but not for the reason first written here.
+        #
+        # It is a composite action with no Node runtime of its own, so it does
+        # not appear in the deprecation notice directly -- and it still carries
+        # one, because the upload-artifact it calls internally is a Node 20
+        # action. That is the single warning the last run reported, down from
+        # ten. Clearing it means a newer major of this action, which is a
+        # different pairing with deploy-pages from the one GitHub ships in its
+        # own Pages starter workflow, and that trade has not been made yet.
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/docs/html

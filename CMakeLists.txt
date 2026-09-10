@@ -47,6 +47,7 @@ add_library(motionkit_core
   src/core/se3.cpp
   src/core/frame_graph.cpp
   src/core/cartesian.cpp
+  src/core/collision.cpp
   src/core/calibration.cpp
   src/core/dynamics.cpp
   src/core/kinematics.cpp

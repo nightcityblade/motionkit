@@ -23,6 +23,7 @@
 
 #include "motionkit/core/calibration.hpp"
 #include "motionkit/core/cartesian.hpp"
+#include "motionkit/core/collision.hpp"
 #include "motionkit/core/dynamics.hpp"
 #include "motionkit/core/frame_graph.hpp"
 #include "motionkit/core/kinematics.hpp"
@@ -365,6 +366,28 @@ TEST(TrajectoryRealtime, ReachingFromAnArbitraryStateDoesNotAllocate) {
       const auto planned = ReachProfile::plan(from, 1.0, limits);
       accumulator += planned.value.duration();
       accumulator += planned.value.sample(planned.value.duration() * 0.5).position;
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
+
+TEST(CollisionRealtime, CheckingClearanceDoesNotAllocate) {
+  // A clearance check belongs on the cyclic path -- it is what a supervisor
+  // runs before letting a setpoint through -- so the shapes live in fixed
+  // arrays and the query builds nothing.
+  const auto model = CollisionModel::sixAxisExample();
+  ASSERT_TRUE(model);
+  const std::array<Scalar, 6> q{0.3, -0.6, 1.0, 0.4, 0.7, -0.2};
+  const std::array<Capsule, 3> obstacles{
+      Capsule{Vec3{0.6, 0.0, 0.0}, Vec3{0.6, 0.0, 1.2}, 0.05},
+      Capsule{Vec3{-0.5, 0.4, 0.3}, Vec3{-0.5, 0.4, 0.3}, 0.10},
+      Capsule{Vec3{0.0, -0.7, 0.0}, Vec3{0.4, -0.7, 0.9}, 0.03}};
+
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      accumulator += model.value.clearance(q, obstacles).value.distance;
     }
   });
   EXPECT_NE(accumulator, 12345.6789);
