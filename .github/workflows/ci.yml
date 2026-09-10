@@ -33,7 +33,7 @@ jobs:
             cc: clang-18
             cxx: clang++-18
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -60,7 +60,7 @@ jobs:
       matrix:
         preset: [asan, tsan]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18
       - name: Configure
@@ -82,7 +82,7 @@ jobs:
     name: benchmarks build and run
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
@@ -107,7 +107,7 @@ jobs:
     name: clang-tidy + clang-format
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18 clang-tidy-18 clang-format-18
 
@@ -135,7 +135,7 @@ jobs:
     name: installed package is consumable
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
@@ -332,7 +332,7 @@ jobs:
     name: API reference builds clean
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build doxygen
 
@@ -348,6 +348,10 @@ jobs:
           cmake --build build --target docs
 
       - name: Upload for publication
+        # Deliberately still v3. It is a composite action with no Node runtime
+        # of its own, so it is not part of the Node 20 deprecation, and v3 with
+        # deploy-pages@v5 is the pairing GitHub ships in its own Pages starter
+        # workflow. Newer majors exist; none of them buy anything here.
         uses: actions/upload-pages-artifact@v3
         with:
           path: build/docs/html
@@ -373,4 +377,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
