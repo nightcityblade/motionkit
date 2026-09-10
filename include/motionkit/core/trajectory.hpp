@@ -258,6 +258,92 @@ class StopProfile {
   bool started_outside_limit_{false};
 };
 
+/// Segments in a move that starts from an arbitrary state: three to reach the
+/// cruise velocity, one to hold it, three to come to rest.
+inline constexpr std::size_t kReachPhaseCount = 7;
+
+/// A jerk-limited move to a position, from wherever the axis already is.
+///
+/// ScurveProfile starts at rest and ends at rest, which is the right shape for
+/// a move planned in advance and the wrong one for everything else. An axis
+/// already running cannot use it: to follow a new target it must first stop,
+/// and stopping in order to start again is exactly what a machine should not
+/// do between two segments of the same job.
+///
+/// This profile takes a full MotionState, so it can be planned from the sample
+/// the executor is holding right now -- mid-move, at speed, mid-acceleration.
+/// It ends at rest at `goal`, and every limit is respected throughout.
+///
+/// **The initial velocity may point the wrong way, and often does.** An axis
+/// travelling at 2 m/s towards a goal 10 mm away cannot arrive at rest without
+/// overshooting and coming back; one travelling away from its goal must reverse
+/// first. Both are ordinary and neither is an error. `reversed()` reports which
+/// happened, because a move that turns round is worth noticing even when it is
+/// correct -- it usually means the target changed later than it should have.
+///
+/// Sampling is O(1), allocation-free and noexcept, as everything on the cyclic
+/// path is.
+class ReachProfile {
+ public:
+  /// A zero-duration profile parked at position zero.
+  constexpr ReachProfile() noexcept = default;
+
+  /// Plans the fastest move from `from` to `goal` that respects `limits`.
+  ///
+  /// `from` may carry any velocity and any acceleration, including one already
+  /// beyond the limit -- the same acceptance StopProfile makes, and for the
+  /// same reason: refusing to plan for a machine that is already misbehaving
+  /// has the logic backwards. Fails only when `from` is not finite or `limits`
+  /// does not validate.
+  static Expected<ReachProfile, TrajectoryError> plan(const MotionState& from,
+                                                      Scalar goal,
+                                                      const MotionLimits& limits);
+
+  /// Total time of the move, in seconds.
+  [[nodiscard]] constexpr Scalar duration() const noexcept { return duration_; }
+
+  /// Position the profile starts from.
+  [[nodiscard]] constexpr Scalar startPosition() const noexcept { return start_; }
+
+  /// Position the profile ends at, with zero velocity and zero acceleration.
+  [[nodiscard]] constexpr Scalar goalPosition() const noexcept { return goal_; }
+
+  /// The velocity held during the middle segment, signed.
+  ///
+  /// Zero-length for a short move, in which case this is the peak velocity
+  /// reached rather than one that is held. Its sign is the direction the axis
+  /// spends most of the move travelling, which for a reversing move is not the
+  /// direction it started in.
+  [[nodiscard]] constexpr Scalar cruiseVelocity() const noexcept { return cruise_; }
+
+  /// True when the axis had to travel away from `goal` before travelling
+  /// towards it, or had to pass `goal` and come back.
+  [[nodiscard]] constexpr bool reversed() const noexcept { return reversed_; }
+
+  /// True when the state handed to plan() was already accelerating harder than
+  /// the limit allowed. The move is still planned; this records that the
+  /// machine was outside its envelope before the move was asked for.
+  [[nodiscard]] constexpr bool startedOutsideAccelerationLimit() const noexcept {
+    return started_outside_limit_;
+  }
+
+  /// State at time `t`, clamped to [0, duration()].
+  ///
+  /// Before the start the profile holds the initial state; at or after
+  /// duration() the axis is at `goal` with zero velocity and zero acceleration.
+  [[nodiscard]] MotionSample sample(Scalar t) const noexcept;
+
+ private:
+  detail::JerkSegments<kReachPhaseCount> segments_{};
+  MotionState start_state_{};
+  Scalar duration_{0.0};
+  Scalar start_{0.0};
+  Scalar goal_{0.0};
+  Scalar cruise_{0.0};
+  bool reversed_{false};
+  bool started_outside_limit_{false};
+};
+
 /// The highest speed at which an axis running at constant velocity may travel
 /// and still be brought to rest within `available_distance`.
 ///

@@ -32,6 +32,11 @@ item below names a specific way this codebase has been wrong.
 - **Could this test pass while inert?** The allocation counter has a positive
   control (`TheAllocationCounterItselfWorks`) because a counter that never
   increments passes silently. Any test asserting an absence needs one.
+- **Is the subject allowed to define the answer?** `ReachProfile::sample`
+  substitutes the exact goal at the end of the move, so a test that samples
+  there and asserts the axis arrived is asking the profile what it was told to
+  say. It passed while a real profile was finishing 1.2 units short. Sample just
+  before the end, or compare against something the subject does not control.
 - **Is unbounded work hiding behind a bound?** An iterative solve has
   `max_iterations`; a loop over a container has whatever the caller put in it.
 

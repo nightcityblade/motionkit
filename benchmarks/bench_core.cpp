@@ -157,6 +157,23 @@ int main() {
                         .value.stoppingDistance();
          }));
 
+  // Two rows because the two branches cost very different amounts. A goal far
+  // enough away to need time at the velocity limit is solved in closed form; a
+  // short one has no cruise phase and falls to the bisection.
+  report("ReachProfile::plan (long, closed form)", measure([&](std::size_t i) {
+           const Scalar phase = static_cast<Scalar>(i % 128) * 0.05;
+           const MotionState from{0.0, 1.5 * std::sin(phase), 4.0 * std::cos(phase)};
+           const auto reached = ReachProfile::plan(from, 1.0, limits[0]);
+           g_sink = reached.value.duration();
+         }));
+
+  report("ReachProfile::plan (short, bisected)", measure([&](std::size_t i) {
+           const Scalar phase = static_cast<Scalar>(i % 128) * 0.05;
+           const MotionState from{0.0, 1.5 * std::sin(phase), 4.0 * std::cos(phase)};
+           const auto reached = ReachProfile::plan(from, 0.05, limits[0]);
+           g_sink = reached.value.duration();
+         }));
+
   report("maximumSafeSpeed", measure([&](std::size_t i) {
            const Scalar room = 0.001 + 0.001 * static_cast<Scalar>(i % 1000);
            g_sink = maximumSafeSpeed(room, axis).value;

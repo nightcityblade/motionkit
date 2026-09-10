@@ -20,11 +20,12 @@ Two caveats worth knowing before you spend an afternoon on them:
 
 - **TSan excludes the allocation tests.** They replace global `operator new`,
   which is exactly what TSan's runtime also does. `MOTIONKIT_BUILD_ALLOCATION_TESTS`
-  is off under that preset, so the count is 173 rather than 188.
-- **`ScurveProfile` is rest-to-rest.** Planning to a position from a non-zero
-  velocity is WP-12b and not implemented, which is also why consecutive
-  Cartesian moves cannot be blended and stop at every waypoint. `StopProfile`
-  does start from an arbitrary state, which is a different problem.
+  is off under that preset, so the count is 182 rather than 198.
+- **`ScurveProfile` is rest-to-rest; `ReachProfile` is not.** Use the latter
+  when the axis is already moving. Consecutive Cartesian moves still stop at
+  every waypoint, but that is now `CartesianPlan` not using `ReachProfile`
+  rather than the profile being missing. `StopProfile` starts from an arbitrary
+  state and has no position target, which is a third problem again.
 
 ## Before opening a pull request
 

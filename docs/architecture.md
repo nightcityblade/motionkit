@@ -154,11 +154,12 @@ across would make the boundary a suggestion; keeping the traffic through one
 place means the awkward part of the design is in one file with an ADR attached
 to it ([ADR-0012](adr/0012-cartesian-moves-are-paced-by-one-speed.md)).
 
-What is still missing sits on the motion side rather than at the join.
-`ScurveProfile` is rest-to-rest, so consecutive Cartesian moves stop at every
-waypoint; blending needs a profile that starts from a non-zero state. That, full
-time-optimal path parameterisation, and CUDA batch inverse kinematics are the
-remaining WP-12b items.
+What is still missing no longer sits on the motion side. `ReachProfile` plans
+from an arbitrary state to a position, which is the piece blending was waiting
+on; what remains is `CartesianPlan` using it, so that consecutive moves stop
+carrying every waypoint down to rest. That, full time-optimal path
+parameterisation, and CUDA batch inverse kinematics are the remaining WP-12c
+items.
 
 ### Rules that decide where code goes
 

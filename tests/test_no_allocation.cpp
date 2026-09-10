@@ -351,6 +351,26 @@ TEST(TrajectoryRealtime, SamplingAStopDoesNotAllocate) {
 // Kinematics
 // ---------------------------------------------------------------------------
 
+TEST(TrajectoryRealtime, ReachingFromAnArbitraryStateDoesNotAllocate) {
+  // Planning from the state the executor is already holding is the operation a
+  // controller performs when a target changes mid-move, so it happens on the
+  // cyclic path rather than ahead of it. The bisection runs a fixed sixty
+  // iterations over stack values; nothing about it grows.
+  const MotionLimits limits{2.0, 6.0, 40.0};
+  Scalar accumulator = 0.0;
+  const std::size_t allocations = allocationsDuring([&] {
+    for (int i = 0; i < 1000; ++i) {
+      const Scalar phase = static_cast<Scalar>(i) * 0.01;
+      const MotionState from{0.0, 1.5 * std::sin(phase), 4.0 * std::cos(phase)};
+      const auto planned = ReachProfile::plan(from, 1.0, limits);
+      accumulator += planned.value.duration();
+      accumulator += planned.value.sample(planned.value.duration() * 0.5).position;
+    }
+  });
+  EXPECT_NE(accumulator, 12345.6789);
+  EXPECT_EQ(allocations, 0u);
+}
+
 TEST(CartesianRealtime, SamplingAPlannedMoveDoesNotAllocate) {
   // Planning a Cartesian move is expensive and happens once. Sampling it
   // happens every control cycle, which is why the plan stores its knots in a

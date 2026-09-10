@@ -31,6 +31,13 @@ bump as "something may have moved".
 
 ### Added
 
+- **Moves from an axis that is already moving** (WP-12b). `ReachProfile` plans
+  a jerk-limited move to a position from any `MotionState` -- mid-move, at
+  speed, mid-acceleration -- arriving at rest. Reports whether the move had to
+  turn round, which happens both when the axis points the wrong way and when it
+  is going at the goal too fast to stop short of it. This is the piece blending
+  was waiting on.
+  ([ADR-0013](docs/adr/0013-reaching-a-position-from-a-moving-axis.md))
 - **Straight-line Cartesian moves** (WP-12a). `CartesianPlan` follows a line in
   space with the orientation slerping along it, solving inverse kinematics at
   knots seeded from one another and pacing the whole move so that no joint

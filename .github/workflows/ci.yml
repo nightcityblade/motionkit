@@ -283,6 +283,18 @@ jobs:
             if (!arm.forward(along).value.isApprox(line_to, 1e-5, 1e-5)) {
               return 17;
             }
+            // ReachProfile through the installed package. From a state that is
+            // already moving away from the goal, so a profile that quietly
+            // ignored the initial velocity would land somewhere else.
+            const auto turning =
+                ReachProfile::plan(MotionState{0.0, 1.5, 0.0}, -0.8, limits[0]);
+            if (!turning || !turning.value.reversed()) {
+              return 18;
+            }
+            if (std::abs(turning.value.sample(turning.value.duration()).position + 0.8) >
+                1e-9) {
+              return 19;
+            }
             return 0;
           }
           EOT

@@ -24,11 +24,12 @@ Eigen, no KDL, no Pinocchio — the algorithms are the point.
 | WP-11 | Stopping from an arbitrary state, and the safety envelope it defines | **Done** |
 | WP-06 | Hand-eye and TCP calibration | **Done** |
 | WP-12a | Straight-line Cartesian moves, paced by joint limits | **Done** |
-| WP-12b | Blending, full TOPP, CUDA batch IK and collision checking | Planned |
+| WP-12b | Moves from a non-zero state (the piece blending needed) | **Done** |
+| WP-12c | Blending itself, full TOPP, CUDA batch IK and collision checking | Planned |
 | WP-15 | API reference, architecture docs, contribution process | **Done** |
 
-188 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
-exercise the full suite. TSan exercises the 173 ordinary tests; the fifteen
+198 tests, all passing under GCC and Clang in Debug and Release. ASan and UBSan
+exercise the full suite. TSan exercises the 182 ordinary tests; the sixteen
 allocator-interposition tests run in a dedicated executable and are excluded
 from TSan because both the tests and the sanitizer runtime replace the global
 allocation functions.
@@ -47,7 +48,7 @@ ctest --preset debug
 ```
 
 Other presets: `release`, `asan`, `tsan`, `tidy`. The `tsan` preset intentionally
-runs 173 tests: the fifteen tests that instrument global allocation are a
+runs 182 tests: the sixteen tests that instrument global allocation are a
 test-harness incompatibility with TSan, not an exemption for production code.
 
 Before pushing, run the formatter -- CI enforces it:
@@ -236,6 +237,22 @@ allocates nothing, which is 0.23 % of a 1 kHz cycle, so it can run in the loop
 that needs the answer rather than on a thread with a queue in front of it. See
 [ADR-0008](docs/adr/0008-kinematics-by-screws-and-a-damped-inverse.md).
 
+**A moving axis does not have to stop before it can follow a new target.**
+`ScurveProfile` starts at rest, so an axis already running can only use it by
+stopping first — which is exactly what makes a machine look broken. `ReachProfile`
+takes a full `MotionState`, so it can be planned from the sample the executor is
+holding right now. From 1.0 m/s to a goal 3 m away it takes **1.82 s** against
+**2.22 s** for stop-then-restart.
+
+**The cruise velocity is found by bisection, not by a dozen closed-form cases.**
+Distance covered is monotonic in cruise velocity, so a bracket that narrows
+cannot be wrong in a case nobody thought of — where the closed form is a dozen
+sign conventions, each wrong only for inputs nobody tried. It costs **1.32 µs**
+against 120 ns for the closed-form branch, still 0.13 % of a 1 kHz cycle. From
+rest it reproduces `ScurveProfile` to **1.1e-16 s**, which is two constructions
+sharing no code agreeing. See
+[ADR-0013](docs/adr/0013-reaching-a-position-from-a-moving-axis.md).
+
 **A Cartesian move is paced by one speed, and the path between knots is C1.**
 Linear interpolation between knots makes joint velocity piecewise constant, so
 acceleration is an *impulse* at every knot crossing — a plan that satisfies its
@@ -386,8 +403,8 @@ test wrong.
 |---|---|
 | GCC + Clang × Debug + Release | `-Wconversion` and `-Wold-style-cast` fire on different constructs per compiler |
 | `-Werror` with `-Wconversion -Wsign-conversion -Wold-style-cast -Wshadow` | Silent narrowing in a pose pipeline is a field failure, not a warning |
-| ASan + UBSan on all 188 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
-| TSan on the 173 ordinary tests | Ahead of the threaded executor in WP-08; the fifteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
+| ASan + UBSan on all 198 tests, `-fno-sanitize-recover=all` | A UBSan finding fails the build rather than printing a note |
+| TSan on the 182 ordinary tests | Ahead of the threaded executor in WP-08; the sixteen allocator-interposition tests are excluded because TSan defines the same global allocation hooks |
 | clang-tidy, `--warnings-as-errors=*` | Rule set and exclusions justified in ADR-0002 |
 | `scripts/format.sh --check` with clang-format 18 | Formatting is not a review topic, and CI runs the same check developers run |
 | **install with repository tests off + downstream consumer compile and run** | Exercises only the installed package contract; it caught a real bug on first run when the exported target was `motionkit::motionkit_core` but consumers used `motionkit::core` |
@@ -400,7 +417,7 @@ test wrong.
 | Document | What it answers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | C4 context, container and component views, and the rules that decide where new code goes |
-| [docs/adr/](docs/adr/) | Twelve decisions, each with the alternatives that lost and why |
+| [docs/adr/](docs/adr/) | Thirteen decisions, each with the alternatives that lost and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, what the gates are, and the conventions clang-format cannot express |
 | [docs/review-checklist.md](docs/review-checklist.md) | The questions that have actually caught something here |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, and what `0.x` promises |
@@ -437,7 +454,7 @@ Unit tests assert known values; the interesting ones assert **properties** over
 thousands of uniformly sampled rotations from a fixed seed — a property test you
 cannot replay is a flake, not a test.
 
-Fifteen allocation tests are instrumentation rather than ordinary unit tests. They
+Sixteen allocation tests are instrumentation rather than ordinary unit tests. They
 run in their own executable because their global `operator new`/`operator delete`
 replacements affect an entire process. That target alone suppresses GNU's
 `-Wmismatched-new-delete` diagnostic: the `malloc`/`free` pairing is deliberate
@@ -477,6 +494,8 @@ no real-time scheduling:
 | `SynchronizedTrajectory::sample`, 6 axes | 8.6 | 8.8 | 14.8 | 0.001 % |
 | `SynchronizedTrajectory::plan`, 6 axes | 86.6 | 91.8 | 339.5 | 0.009 % |
 | `StopProfile::plan` | 17.6 | 18.6 | 26.5 | 0.002 % |
+| `ReachProfile::plan`, long move | 117.4 | 120.3 | 289.8 | 0.012 % |
+| `ReachProfile::plan`, short move | 1257.1 | 1320.8 | 4240.3 | 0.132 % |
 | `maximumSafeSpeed` | 4.8 | 5.1 | 11.7 | 0.0005 % |
 | `SerialChain::forward`, 6R | 175.7 | 176.6 | 527.7 | 0.018 % |
 | `SerialChain::jacobian`, 6R | 417.4 | 427.2 | 1029.7 | 0.043 % |

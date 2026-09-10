@@ -8,6 +8,7 @@
 #include <span>
 #include <string_view>
 
+#include "motionkit/core/detail/jerk_segments.hpp"
 #include "motionkit/core/expected.hpp"
 #include "motionkit/core/motion_state.hpp"
 #include "motionkit/core/types.hpp"
@@ -250,6 +251,94 @@ bool ScurveProfile::hasAccelerationPlateau() const noexcept {
 // StopProfile
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/// One jerk-limited change of velocity: acceleration ramps from `a_from`
+/// towards a peak, holds, then ramps to zero.
+struct VelocityLeg {
+  std::array<Scalar, 3> durations{};
+  std::array<Scalar, 3> jerks{};
+  Scalar duration{0.0};
+  Scalar displacement{0.0};
+  Scalar peak_acceleration{0.0};
+};
+
+/// Plans the fastest change from `(v_from, a_from)` to `v_to` at zero
+/// acceleration.
+///
+/// The whole of a state-to-rest move is two of these with a cruise between
+/// them, which is why this is the only piece of algebra in the file.
+///
+/// `reach` is the velocity change obtained by ramping the existing
+/// acceleration straight to zero and doing nothing else -- the change already
+/// committed, which cannot be avoided because acceleration cannot step. Which
+/// side of it the target falls on decides whether the peak is above `a_from`
+/// or below it, and that is the only case split needed.
+VelocityLeg velocityLeg(Scalar v_from, Scalar a_from, Scalar v_to, Scalar a_max,
+                        Scalar j_max) noexcept {
+  const Scalar change = v_to - v_from;
+  const Scalar reach = (a_from * std::fabs(a_from)) / (2.0 * j_max);
+
+  Scalar peak = 0.0;
+  if (change > reach) {
+    // The discriminant cannot go negative here: change > reach is exactly the
+    // condition that keeps it positive, and it also guarantees peak > a_from.
+    peak = std::sqrt(((2.0 * j_max * change) + (a_from * a_from)) / 2.0);
+  } else if (change < reach) {
+    peak = -std::sqrt(((a_from * a_from) - (2.0 * j_max * change)) / 2.0);
+  } else {
+    // Already committed to exactly this change: ramp the acceleration out and
+    // let it happen.
+    peak = 0.0;
+  }
+
+  Scalar hold = 0.0;
+  const Scalar clamped = std::clamp(peak, -a_max, a_max);
+  if (clamped != peak) {
+    peak = clamped;
+    // The velocity a ramp to the peak and back to zero delivers on its own,
+    // written for any arrangement of the two rather than for the usual one.
+    // The usual one assumes the peak lies beyond the starting acceleration,
+    // which stops being true exactly when the axis arrives already accelerating
+    // harder than the limit -- and then the sign flips and the closed form
+    // silently returns the wrong number for a state the profile is documented
+    // to accept.
+    const Scalar without_hold =
+        ((std::fabs(peak - a_from) * (a_from + peak)) + (std::fabs(peak) * peak)) /
+        (2.0 * j_max);
+    hold = (change - without_hold) / peak;
+  }
+
+  VelocityLeg leg;
+  leg.peak_acceleration = peak;
+  // Jerk signs come from the values they connect rather than from the branch
+  // above, so a starting acceleration already past the limit -- which makes the
+  // first ramp go the other way -- needs no case of its own.
+  const Scalar first = peak - a_from;
+  leg.durations = {std::fabs(first) / j_max, std::max(hold, Scalar{0.0}),
+                   std::fabs(peak) / j_max};
+  leg.jerks = {first >= 0.0 ? j_max : -j_max, 0.0, peak >= 0.0 ? -j_max : j_max};
+
+  detail::JerkSegments<3> segments;
+  segments.build(leg.durations, leg.jerks, v_from, a_from);
+  leg.duration = segments.duration();
+  leg.displacement = segments.terminal().position;
+  return leg;
+}
+
+/// Distance covered going from `(v_from, a_from)` up to `cruise` and then down
+/// to rest, with no time spent cruising.
+///
+/// Monotonically increasing in `cruise` -- a faster middle covers more ground
+/// on both legs -- which is the property the search below relies on.
+Scalar spanAt(Scalar cruise, Scalar v_from, Scalar a_from, Scalar a_max,
+              Scalar j_max) noexcept {
+  return velocityLeg(v_from, a_from, cruise, a_max, j_max).displacement +
+         velocityLeg(cruise, 0.0, 0.0, a_max, j_max).displacement;
+}
+
+}  // namespace
+
 Expected<StopProfile, TrajectoryError> StopProfile::plan(const MotionState& from,
                                                          const MotionLimits& limits) {
   if (!std::isfinite(from.position) || !std::isfinite(from.velocity) ||
@@ -469,6 +558,111 @@ bool SynchronizedTrajectory::sample(Scalar t,
     out[i].jerk = displacement * s.jerk;
   }
   return true;
+}
+
+Expected<ReachProfile, TrajectoryError> ReachProfile::plan(const MotionState& from,
+                                                           Scalar goal,
+                                                           const MotionLimits& limits) {
+  if (!std::isfinite(from.position) || !std::isfinite(from.velocity) ||
+      !std::isfinite(from.acceleration) || !std::isfinite(goal)) {
+    return {ReachProfile{}, TrajectoryError::NonFiniteInput};
+  }
+  if (const TrajectoryError error = limits.validate(); error != TrajectoryError::None) {
+    return {ReachProfile{}, error};
+  }
+
+  const Scalar v_max = limits.max_velocity;
+  const Scalar a_max = limits.max_acceleration;
+  const Scalar j_max = limits.max_jerk;
+  const Scalar target = goal - from.position;
+
+  // How far the axis travels going flat out one way or the other, with no time
+  // spent cruising. Anything between these two distances is reachable by
+  // choosing a slower middle; anything beyond needs time at the limit.
+  const Scalar span_high = spanAt(v_max, from.velocity, from.acceleration, a_max, j_max);
+  const Scalar span_low = spanAt(-v_max, from.velocity, from.acceleration, a_max, j_max);
+
+  Scalar cruise = 0.0;
+  Scalar hold = 0.0;
+  if (target >= span_high) {
+    cruise = v_max;
+    hold = (target - span_high) / v_max;
+  } else if (target <= span_low) {
+    cruise = -v_max;
+    hold = (target - span_low) / -v_max;
+  } else {
+    // Bisection, not a closed form. The closed form exists and is a dozen
+    // cases -- whether the peak clips the limit on each leg, whether the start
+    // is accelerating the right way, whether the move reverses -- and each one
+    // is a sign convention somebody has to get right. spanAt is monotonic in
+    // the cruise velocity, which makes bisection unable to be wrong in a case
+    // nobody thought of. Sixty halvings reach the representable limit and cost
+    // 1.3 us against 120 ns for the closed-form branch -- eleven times more,
+    // and still 0.13% of a millisecond cycle.
+    Scalar low = -v_max;
+    Scalar high = v_max;
+    for (int iteration = 0; iteration < 60; ++iteration) {
+      const Scalar middle = 0.5 * (low + high);
+      const Scalar span = spanAt(middle, from.velocity, from.acceleration, a_max, j_max);
+      if (span == target) {
+        // An exact hit is taken exactly rather than bracketed around. Without
+        // this an axis already at rest on its goal gets a cruise velocity of
+        // about 1e-18 -- the residue bisection cannot remove -- and a move
+        // lasting a nanosecond instead of no time at all.
+        low = middle;
+        high = middle;
+        break;
+      }
+      if (span < target) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    cruise = 0.5 * (low + high);
+  }
+
+  const VelocityLeg up =
+      velocityLeg(from.velocity, from.acceleration, cruise, a_max, j_max);
+  const VelocityLeg down = velocityLeg(cruise, 0.0, 0.0, a_max, j_max);
+
+  ReachProfile profile;
+  profile.start_state_ = from;
+  profile.start_ = from.position;
+  profile.goal_ = goal;
+  profile.cruise_ = cruise;
+  profile.started_outside_limit_ = std::fabs(from.acceleration) > a_max;
+  // The velocity crosses zero exactly when the middle of the move runs against
+  // the way the axis was already going -- which covers both an axis pointed the
+  // wrong way and one going at the goal too fast to stop short of it.
+  profile.reversed_ = (from.velocity * cruise) < 0.0;
+
+  const std::array<Scalar, kReachPhaseCount> durations{
+      up.durations[0],   up.durations[1],   up.durations[2],  std::max(hold, Scalar{0.0}),
+      down.durations[0], down.durations[1], down.durations[2]};
+  const std::array<Scalar, kReachPhaseCount> jerks{
+      up.jerks[0],   up.jerks[1],   up.jerks[2],  0.0,
+      down.jerks[0], down.jerks[1], down.jerks[2]};
+  profile.segments_.build(durations, jerks, from.velocity, from.acceleration);
+  profile.duration_ = profile.segments_.duration();
+  return {profile, TrajectoryError::None};
+}
+
+MotionSample ReachProfile::sample(Scalar t) const noexcept {
+  if (!(t > 0.0)) {
+    const MotionSample entry = segments_.sampleInterior(0.0);
+    return MotionSample{start_state_.position, start_state_.velocity,
+                        start_state_.acceleration, entry.jerk};
+  }
+  if (t >= duration_) {
+    // The endpoint is promised, not computed. Summing seven segments lands
+    // within rounding of the goal, and an axis told to stop a few picometres
+    // short of its target is an axis that never quite arrives.
+    return MotionSample{goal_, 0.0, 0.0, 0.0};
+  }
+  const MotionSample relative = segments_.sampleInterior(t);
+  return MotionSample{start_ + relative.position, relative.velocity,
+                      relative.acceleration, relative.jerk};
 }
 
 }  // namespace motionkit
