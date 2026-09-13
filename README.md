@@ -63,17 +63,17 @@ scripts/format.sh
 It pins clang-format 18; a different major version formats differently and CI
 will reject the result.
 
-### Compile-time limits
+## Compile-time limits
 
 motionkit uses fixed-size storage to keep its core algorithms allocation-free.
 The following public limits are intentionally fixed and cannot currently be
 overridden through CMake:
 
-| Constant | Limit |
-|---|---:|
-| `kMaxPathKnots` | 65 |
-| `kMaxWaypoints` | 16 |
-| `kMaxObstacles` | 32 |
+| Constant | Defining header | Limit |
+|---|---|---:|
+| `kMaxPathKnots` | `motionkit/core/cartesian.hpp` | 65 |
+| `kMaxWaypoints` | `motionkit/core/cartesian.hpp` | 16 |
+| `kMaxObstacles` | `motionkit/core/collision.hpp` | 32 |
 
 ## Use it downstream
 
